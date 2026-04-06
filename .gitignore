@@ -1,0 +1,23 @@
+__pycache__/
+archive/
+.omx/
+.eidolon-agents/
+
+# Claude Code local artifacts
+.claude/settings.local.json
+.claude/sessions/
+rust/.claude/
+rust/.omc/
+
+# Rust build artifacts
+rust/target/
+rust/.sandbox-home/
+
+# Eidolon runtime state
+.eidolon/sessions/
+.eidolon/settings.local.json
+rust/.eidolon/
+
+# OS files
+.DS_Store
+Thumbs.db

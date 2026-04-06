@@ -1,0 +1,32 @@
+{
+  "plugins": {
+    "example-bundled@bundled": {
+      "kind": "bundled",
+      "id": "example-bundled@bundled",
+      "name": "example-bundled",
+      "version": "0.1.0",
+      "description": "Example bundled plugin scaffold for the Rust plugin system",
+      "install_path": ".eidolon\\plugins\\installed\\example-bundled-bundled",
+      "source": {
+        "type": "local_path",
+        "path": "E:\\AI-Projects\\Eidolon-CLI\\rust\\crates\\plugins\\bundled\\example-bundled"
+      },
+      "installed_at_unix_ms": 1775471031219,
+      "updated_at_unix_ms": 1775471031219
+    },
+    "sample-hooks@bundled": {
+      "kind": "bundled",
+      "id": "sample-hooks@bundled",
+      "name": "sample-hooks",
+      "version": "0.1.0",
+      "description": "Bundled sample plugin scaffold for hook integration tests.",
+      "install_path": ".eidolon\\plugins\\installed\\sample-hooks-bundled",
+      "source": {
+        "type": "local_path",
+        "path": "E:\\AI-Projects\\Eidolon-CLI\\rust\\crates\\plugins\\bundled\\sample-hooks"
+      },
+      "installed_at_unix_ms": 1775471031221,
+      "updated_at_unix_ms": 1775471031221
+    }
+  }
+}
