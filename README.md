@@ -1,7 +1,7 @@
 # Eidolon
 
 <p align="center">
-  <img src="assets/eidolon-hero.png" alt="Eidolon" width="300" />
+  <img src="assets/eidolon-hero.png" alt="Eidolon" width="600" />
 </p>
 
 <p align="center">
