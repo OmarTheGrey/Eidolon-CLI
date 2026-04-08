@@ -14,6 +14,7 @@ mod conversation;
 mod file_ops;
 pub mod green_contract;
 mod hooks;
+pub mod indexer;
 mod json;
 mod lane_events;
 pub mod lsp_client;
@@ -76,6 +77,7 @@ pub use file_ops::{
 pub use hooks::{
     HookAbortSignal, HookEvent, HookProgressEvent, HookProgressReporter, HookRunResult, HookRunner,
 };
+pub use indexer::{start_background_indexer, IndexHandle};
 pub use lane_events::{
     dedupe_superseded_commit_events, LaneCommitProvenance, LaneEvent, LaneEventBlocker,
     LaneEventName, LaneEventStatus, LaneFailureClass,

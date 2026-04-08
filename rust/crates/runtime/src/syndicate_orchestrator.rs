@@ -264,18 +264,18 @@ impl SyndicateOrchestrator {
                 } else {
                     entry.value.clone()
                 };
-                let _ = writeln!(
-                    out,
-                    "  [{}] {} = {}",
-                    entry.written_by, entry.key, preview
-                );
+                let _ = writeln!(out, "  [{}] {} = {}", entry.written_by, entry.key, preview);
             }
         }
 
         let _ = writeln!(
             out,
             "\nResult: {}",
-            if result.success { "SUCCESS" } else { "PARTIAL FAILURE" }
+            if result.success {
+                "SUCCESS"
+            } else {
+                "PARTIAL FAILURE"
+            }
         );
         let _ = writeln!(out, "Memory: {}", result.memory_path);
         out

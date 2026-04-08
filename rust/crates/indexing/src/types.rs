@@ -65,7 +65,7 @@ impl WorkspaceIndex {
 }
 
 /// Runtime configuration for the indexing subsystem.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct IndexConfig {
     pub enabled: bool,
     pub model_id: String,

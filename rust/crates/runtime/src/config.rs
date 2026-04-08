@@ -61,6 +61,7 @@ pub struct RuntimeFeatureConfig {
     permission_mode: Option<ResolvedPermissionMode>,
     permission_rules: RuntimePermissionRuleConfig,
     sandbox: SandboxConfig,
+    indexing: indexing::IndexConfig,
 }
 
 /// Hook command lists grouped by lifecycle stage.
@@ -283,6 +284,7 @@ impl ConfigLoader {
             permission_mode: parse_optional_permission_mode(&merged_value)?,
             permission_rules: parse_optional_permission_rules(&merged_value)?,
             sandbox: parse_optional_sandbox_config(&merged_value)?,
+            indexing: parse_optional_indexing_config(&merged_value),
         };
 
         Ok(RuntimeConfig {
@@ -367,6 +369,11 @@ impl RuntimeConfig {
     pub fn sandbox(&self) -> &SandboxConfig {
         &self.feature_config.sandbox
     }
+
+    #[must_use]
+    pub fn indexing(&self) -> &indexing::IndexConfig {
+        &self.feature_config.indexing
+    }
 }
 
 impl RuntimeFeatureConfig {
@@ -420,6 +427,11 @@ impl RuntimeFeatureConfig {
     #[must_use]
     pub fn sandbox(&self) -> &SandboxConfig {
         &self.sandbox
+    }
+
+    #[must_use]
+    pub fn indexing(&self) -> &indexing::IndexConfig {
+        &self.indexing
     }
 }
 
@@ -812,6 +824,53 @@ fn parse_optional_oauth_config(
     }))
 }
 
+fn parse_optional_indexing_config(root: &JsonValue) -> indexing::IndexConfig {
+    let mut config = indexing::IndexConfig::default();
+
+    let Some(obj) = root
+        .as_object()
+        .and_then(|o| o.get("indexing"))
+        .and_then(|v| v.as_object())
+    else {
+        return config;
+    };
+
+    if let Some(v) = obj.get("enabled").and_then(JsonValue::as_bool) {
+        config.enabled = v;
+    }
+    if let Some(v) = obj.get("modelId").and_then(JsonValue::as_str) {
+        config.model_id = v.to_string();
+    }
+    if let Some(v) = obj.get("chunkLines").and_then(JsonValue::as_i64) {
+        config.chunk_lines = usize::try_from(v).unwrap_or(config.chunk_lines);
+    }
+    if let Some(v) = obj.get("overlapLines").and_then(JsonValue::as_i64) {
+        config.overlap_lines = usize::try_from(v).unwrap_or(config.overlap_lines);
+    }
+    if let Some(v) = obj.get("maxFileSizeBytes").and_then(JsonValue::as_i64) {
+        config.max_file_size_bytes = usize::try_from(v).unwrap_or(config.max_file_size_bytes);
+    }
+    if let Some(v) = obj.get("autoContextTopK").and_then(JsonValue::as_i64) {
+        config.auto_context_top_k = usize::try_from(v).unwrap_or(config.auto_context_top_k);
+    }
+    if let Some(v) = obj.get("autoContextEnabled").and_then(JsonValue::as_bool) {
+        config.auto_context_enabled = v;
+    }
+    if let Some(v) = obj.get("cacheDir").and_then(JsonValue::as_str) {
+        config.cache_dir = std::path::PathBuf::from(v);
+    }
+    if let Some(arr) = obj.get("excludedExtensions").and_then(JsonValue::as_array) {
+        let exts: Vec<String> = arr
+            .iter()
+            .filter_map(|v| v.as_str().map(String::from))
+            .collect();
+        if !exts.is_empty() {
+            config.excluded_extensions = exts;
+        }
+    }
+
+    config
+}
 fn parse_mcp_server_config(
     server_name: &str,
     value: &JsonValue,
