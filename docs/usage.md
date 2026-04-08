@@ -77,6 +77,7 @@ Inside the REPL, prefix commands with `/`:
 | `/compact` | Force session compaction |
 | `/export` | Export conversation |
 | `/agents [args]` | Manage sub-agents |
+| `/syndicate [args]` | Run or inspect Syndicate collections |
 | `/mcp [args]` | Manage MCP servers |
 | `/skills [args]` | Browse and invoke skills |
 | `/plugins [args]` | Plugin management |
@@ -126,6 +127,10 @@ The agent runtime has access to a core set of built-in tools. Each tool call pas
 | `grep_search` | Search file contents with regex |
 | `Skill` | Invoke a skill from `.eidolon/skills/`, `.agents/skills/`, `.claude/skills/` |
 | `Agent` | Spawn a sub-agent for parallel work |
+| `SyndicateMemoryWrite` | Write session-scoped shared memory during syndicate runs |
+| `SyndicateMemoryRead` | Read session-scoped shared memory during syndicate runs |
+| `SyndicateMemoryLog` | Append observations to syndicate session logs |
+| `SyndicateMemorySearch` | Search syndicate shared memory entries |
 | `TodoRead` | Read the current todo list |
 | `TodoWrite` | Update the todo list |
 
@@ -167,6 +172,31 @@ Manage agents with `/agents`:
 /agents           # list active agents
 /agents status    # show agent statuses
 ```
+
+## Syndicate Mode
+
+Syndicate mode coordinates a collection of specialized sub-agents around one shared task.
+
+Run from CLI:
+
+```bash
+eidolon-cli syndicate --list
+eidolon-cli syndicate <collection>
+eidolon-cli syndicate <collection> "<task override>"
+```
+
+Or from REPL:
+
+```text
+/syndicate --list
+/syndicate <collection>
+```
+
+Syndicate runs provide:
+
+- Shared session memory for coordination (`SyndicateMemory*` tools)
+- Per-agent lifecycle tracking in the final summary
+- Spawn safety protections (session spawn cap and recursion guard)
 
 ## Common Workflows
 
