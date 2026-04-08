@@ -22,6 +22,7 @@ This project is built following the **Regula Framework** — a set of agentic de
 - **Tool execution** — bash, file read/write/edit, glob, grep, with permission enforcement per call
 - **Skills system** — reusable prompt templates discovered from project directories, shareable across sessions
 - **Sub-agents** — spawn independent agent workers for parallel tasks with isolated contexts
+- **Syndicate mode** — launch pre-defined multi-agent collections for coordinated coding runs
 - **Plugin hooks** — pre/post tool-use lifecycle hooks via shell scripts for audit, validation, or custom logic
 - **MCP integration** — connect external tool servers over stdio, WebSocket, or HTTP transports
 - **Session persistence** — JSONL-based conversation history with token-aware automatic compaction
@@ -63,6 +64,32 @@ Or start the interactive REPL:
 ```
 
 Run `/doctor` as your first command — it validates auth, config, plugins, and sandbox state.
+
+## Syndicate Mode
+
+PR #1 introduced a first-class multi-agent orchestration path called **Syndicate**.
+
+Use it from CLI:
+
+```bash
+# list available collections
+./target/debug/eidolon-cli syndicate --list
+
+# run a collection with default task
+./target/debug/eidolon-cli syndicate feature-build
+
+# run a collection with an explicit task
+./target/debug/eidolon-cli syndicate feature-build "Implement retries and update tests"
+```
+
+Or from the REPL with `/syndicate`.
+
+Syndicate runs now include:
+
+- Session-scoped shared memory (`SyndicateMemoryWrite/Read/Log/Search`)
+- Structured per-agent progress and summary output
+- Spawn safety guards (session spawn cap and Syndicate recursion protection)
+- Correct failure accounting when an individual agent spawn fails
 
 ## Documentation
 
