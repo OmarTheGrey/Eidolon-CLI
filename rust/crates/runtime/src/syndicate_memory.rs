@@ -84,7 +84,7 @@ impl SyndicateMemory {
             let file =
                 std::fs::File::open(path).map_err(|e| format!("open memory file: {e}"))?;
             let reader = std::io::BufReader::new(file);
-            for line in reader.lines() {
+            for (idx, line) in reader.lines().enumerate() {
                 let line = line.map_err(|e| format!("read memory line: {e}"))?;
                 let trimmed = line.trim();
                 if trimmed.is_empty() {
@@ -99,7 +99,12 @@ impl SyndicateMemory {
                     }
                     Err(e) => {
                         // Skip malformed lines rather than failing the whole load.
-                        eprintln!("syndicate memory: skipping malformed record: {e}");
+                        eprintln!(
+                            "syndicate memory: skipping malformed record at line {}: {}; raw={}",
+                            idx + 1,
+                            e,
+                            trimmed
+                        );
                     }
                 }
             }

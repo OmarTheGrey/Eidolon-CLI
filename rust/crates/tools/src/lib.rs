@@ -74,10 +74,10 @@ mod syndicate_mem_global {
     pub(super) static MEMORY: OnceLock<SyndicateMemory> = OnceLock::new();
 }
 
-fn global_syndicate_memory() -> &'static SyndicateMemory {
-    syndicate_mem_global::MEMORY
-        .get()
-        .expect("syndicate memory not initialized; call init_syndicate_memory first")
+fn global_syndicate_memory() -> Result<&'static SyndicateMemory, String> {
+    syndicate_mem_global::MEMORY.get().ok_or_else(|| {
+        String::from("syndicate memory not initialized; call init_syndicate_memory first")
+    })
 }
 
 /// Initialise the global syndicate memory with a file-backed instance.
@@ -1664,7 +1664,7 @@ fn run_cron_list(_input: Value) -> Result<String, String> {
 
 #[allow(clippy::needless_pass_by_value)]
 fn run_syndicate_memory_write(input: SyndicateMemoryWriteInput) -> Result<String, String> {
-    let entry = global_syndicate_memory().write(&input.key, &input.value, &input.agent_id)?;
+    let entry = global_syndicate_memory()?.write(&input.key, &input.value, &input.agent_id)?;
     to_pretty_json(json!({
         "status": "written",
         "key": entry.key,
@@ -1675,7 +1675,7 @@ fn run_syndicate_memory_write(input: SyndicateMemoryWriteInput) -> Result<String
 
 #[allow(clippy::needless_pass_by_value)]
 fn run_syndicate_memory_read(input: SyndicateMemoryReadInput) -> Result<String, String> {
-    let mem = global_syndicate_memory();
+    let mem = global_syndicate_memory()?;
     if let Some(key) = &input.key {
         match mem.read(key) {
             Some(entry) => to_pretty_json(json!({
@@ -1711,7 +1711,7 @@ fn run_syndicate_memory_read(input: SyndicateMemoryReadInput) -> Result<String, 
 
 #[allow(clippy::needless_pass_by_value)]
 fn run_syndicate_memory_log(input: SyndicateMemoryLogInput) -> Result<String, String> {
-    let entry = global_syndicate_memory().append_log(
+    let entry = global_syndicate_memory()?.append_log(
         &input.agent_id,
         &input.operation,
         input.key.as_deref(),
@@ -1727,7 +1727,7 @@ fn run_syndicate_memory_log(input: SyndicateMemoryLogInput) -> Result<String, St
 
 #[allow(clippy::needless_pass_by_value)]
 fn run_syndicate_memory_search(input: SyndicateMemorySearchInput) -> Result<String, String> {
-    let results: Vec<_> = global_syndicate_memory()
+    let results: Vec<_> = global_syndicate_memory()?
         .search(&input.query)
         .into_iter()
         .map(|e| {
@@ -3337,6 +3337,7 @@ fn spawn_agent_job(job: AgentJob) -> Result<(), String> {
 
     let thread_name = format!("eidolon-agent-{}", job.manifest.agent_id);
     let counter_for_thread = std::sync::Arc::clone(&counter);
+    let counter_for_spawn_error = std::sync::Arc::clone(&counter);
     std::thread::Builder::new()
         .name(thread_name)
         .spawn(move || {
@@ -3360,7 +3361,10 @@ fn spawn_agent_job(job: AgentJob) -> Result<(), String> {
             counter_for_thread.fetch_sub(1, std::sync::atomic::Ordering::Relaxed);
         })
         .map(|_| ())
-        .map_err(|error| error.to_string())
+        .map_err(|error| {
+            counter_for_spawn_error.fetch_sub(1, std::sync::atomic::Ordering::Relaxed);
+            error.to_string()
+        })
 }
 
 fn run_agent_job(job: &AgentJob) -> Result<(), String> {
