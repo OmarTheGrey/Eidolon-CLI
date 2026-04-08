@@ -168,7 +168,6 @@ fn bootstrap_and_system_prompt_emit_json_when_requested() {
 }
 
 #[test]
-#[test]
 fn init_emits_json_when_requested() {
     let root = unique_temp_dir("init-json");
     fs::create_dir_all(&root).expect("temp dir should exist");
