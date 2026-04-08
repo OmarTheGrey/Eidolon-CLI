@@ -148,3 +148,70 @@ The system prompt automatically includes content from these files when they exis
 | `~/.eidolon/instructions.md` | User-level global instructions |
 
 These files let you provide persistent context to the model about your project's conventions, architecture, and preferences.
+
+## Indexing
+
+Controls the local semantic workspace indexer. When enabled, Eidolon downloads a small sentence transformer model and builds a vector index of your codebase in the background. This powers two features: the `semantic_search` tool (explicit model queries) and automatic context injection (transparent snippets in the system prompt).
+
+```json
+{
+  "indexing": {
+    "enabled": true,
+    "modelId": "sentence-transformers/all-MiniLM-L6-v2",
+    "chunkLines": 50,
+    "overlapLines": 10,
+    "maxFileSizeBytes": 524288,
+    "autoContextTopK": 5,
+    "autoContextEnabled": true,
+    "cacheDir": ".eidolon/index",
+    "excludedExtensions": [
+      "png", "jpg", "jpeg", "gif", "svg", "ico", "woff", "woff2", "ttf", "eot",
+      "mp3", "mp4", "wav", "avi", "mov", "pdf", "zip", "tar", "gz", "bz2",
+      "exe", "dll", "so", "dylib", "bin", "dat", "db", "sqlite", "lock",
+      "min.js", "min.css", "map", "wasm", "pyc", "pyo", "class", "o", "obj"
+    ]
+  }
+}
+```
+
+### Indexing Keys
+
+| Key | Type | Default | Description |
+|---|---|---|---|
+| `enabled` | boolean | `false` | Enable the background indexer. When false, the `semantic_search` tool is unavailable and auto-context is skipped. |
+| `modelId` | string | `"sentence-transformers/all-MiniLM-L6-v2"` | HuggingFace model identifier. The model is downloaded on first run (~80 MB) and cached locally. |
+| `chunkLines` | integer | `50` | Number of lines per chunk when splitting source files. |
+| `overlapLines` | integer | `10` | Overlap between adjacent chunks (improves retrieval of code near chunk boundaries). |
+| `maxFileSizeBytes` | integer | `524288` (512 KB) | Files larger than this are skipped during indexing. |
+| `autoContextTopK` | integer | `5` | Number of top matching chunks to inject into the system prompt per turn. |
+| `autoContextEnabled` | boolean | `true` | Whether to automatically inject codebase context into the system prompt. Set to `false` to only use the explicit `semantic_search` tool. |
+| `cacheDir` | string | `".eidolon/index"` | Directory for the persisted index cache (relative to workspace root). |
+| `excludedExtensions` | string[] | *(see above)* | File extensions to skip during discovery. Supports compound extensions like `"min.js"`. |
+
+### How It Works
+
+1. **Model download**: On first run, the model weights (~80 MB) are downloaded from HuggingFace Hub and cached in the system's HF cache directory.
+2. **File discovery**: The indexer walks the workspace using the `ignore` crate (respects `.gitignore`), skipping binary files, oversized files, and excluded extensions.
+3. **Chunking**: Each source file is split into overlapping windows of `chunkLines` lines. Each chunk includes a `// File: <path>` header for context.
+4. **Embedding**: Chunks are tokenized and passed through the BERT model in batches of 32. Output vectors are mean-pooled and L2-normalized to 384 dimensions.
+5. **Caching**: The index is serialized via bincode and written atomically to `cacheDir`. On restart, unchanged files (identified by SHA-256 hash) reuse cached embeddings.
+6. **Search**: Queries are embedded with the same model and compared against all chunk vectors via dot product (cosine similarity for unit vectors). Results above a 0.3 threshold are returned.
+
+### Disabling Auto-Context
+
+If you want the `semantic_search` tool available to the model but don't want implicit system prompt injection:
+
+```json
+{
+  "indexing": {
+    "enabled": true,
+    "autoContextEnabled": false
+  }
+}
+```
+
+### Performance Notes
+
+- The initial index build for a large workspace (10K+ files) may take 30–60 seconds depending on CPU. Subsequent warm starts (from cache) are much faster since only changed files are re-embedded.
+- Embedding inference runs on a dedicated OS thread and does not block the REPL or the async runtime.
+- The model runs on CPU. No GPU is required.

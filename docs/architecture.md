@@ -16,10 +16,15 @@ Eidolon is a modular agent runtime built in Rust, designed following the **Regul
 │                         runtime                              │
 │  config · sessions · permissions · MCP · OAuth · prompts     │
 │  conversation loop · compaction · sandbox · file ops         │
+│  background indexer · IndexHandle · auto-context            │
+├──────────────────────────────────────────────────────────────┤
+│                        indexing                              │
+│  file discovery · chunker · Candle BERT · cosine search     │
+│  cache persistence · incremental rebuild                    │
 └──────────────────────────────────────────────────────────────┘
 ```
 
-The binary crate (`eidolon-cli`) sits at the top and depends on six library crates. The `runtime` crate is the shared foundation — it owns config resolution, session persistence, permission enforcement, and the conversation loop. This layered design means any crate can be replaced or extended independently without modifying the core conversation engine.
+The binary crate (`eidolon-cli`) sits at the top and depends on six library crates. The `runtime` crate is the shared foundation — it owns config resolution, session persistence, permission enforcement, and the conversation loop. The `indexing` crate provides a self-contained embedding pipeline that the runtime wraps with a background thread and the tools crate exposes as the `semantic_search` tool. This layered design means any crate can be replaced or extended independently without modifying the core conversation engine.
 
 ## Workspace Structure
 
@@ -49,7 +54,8 @@ rust/
     │   └── src/
     │       ├── lib.rs          # Public API (sessions, config, permissions, MCP, tools)
     │       ├── config.rs       # Config loading and precedence merging
-    │       ├── conversation.rs # Turn execution loop
+    │       ├── conversation.rs # Turn execution loop + auto-context injection
+    │       ├── indexer.rs      # Background indexer thread + IndexHandle
     │       ├── session.rs      # Session persistence (JSONL)
     │       ├── permissions.rs  # Permission evaluation
     │       ├── permission_enforcer.rs
@@ -74,6 +80,17 @@ rust/
     │   └── src/
     │       ├── lib.rs          # Tool registry, bash/file/agent/skill execution
     │       └── lane_completion.rs # Git lane workflow support
+    ├── indexing/               # Semantic workspace indexing
+    │   └── src/
+    │       ├── lib.rs          # Crate root + re-exports
+    │       ├── types.rs        # ChunkMeta, IndexConfig, SearchResult
+    │       ├── discovery.rs    # Gitignore-aware file walker
+    │       ├── chunker.rs      # Sliding-window line chunker
+    │       ├── model.rs        # HuggingFace model download + Candle BERT load
+    │       ├── embedder.rs     # Batch embedding inference + L2 normalization
+    │       ├── search.rs       # Brute-force cosine similarity search
+    │       ├── cache.rs        # Bincode index persistence (atomic writes)
+    │       └── index.rs        # Incremental index builder
     ├── plugins/                # Plugin system
     │   └── src/lib.rs          # Plugin kinds, metadata, hooks, lifecycle
     ├── telemetry/              # Tracing and analytics
@@ -88,9 +105,10 @@ rust/
 eidolon-cli
 ├── api          ← runtime, telemetry
 ├── commands     ← runtime, plugins
-├── tools        ← api, commands, runtime, plugins
+├── tools        ← api, commands, runtime, plugins, indexing
 ├── plugins      ← (standalone — only serde)
-├── runtime      ← plugins
+├── runtime      ← plugins, indexing
+├── indexing     ← candle, tokenizers, hf-hub, ignore
 └── telemetry    ← (standalone — only serde)
 ```
 
@@ -238,7 +256,7 @@ Sessions persist the full conversation history for resumption:
 
 Tools are the model's interface to the environment. The global tool registry combines:
 
-1. **Built-in tools**: `bash`, `read_file`, `write_file`, `edit_file`, `glob_search`, `grep_search`, `Skill`, `Agent`, `SyndicateMemoryWrite`, `SyndicateMemoryRead`, `SyndicateMemoryLog`, `SyndicateMemorySearch`, `TodoRead`, `TodoWrite`
+1. **Built-in tools**: `bash`, `read_file`, `write_file`, `edit_file`, `glob_search`, `grep_search`, `semantic_search`, `Skill`, `Agent`, `SyndicateMemoryWrite`, `SyndicateMemoryRead`, `SyndicateMemoryLog`, `SyndicateMemorySearch`, `TodoRead`, `TodoWrite`
 2. **MCP tools**: Dynamically registered from MCP server discovery
 3. **Conditional tools**: Enabled based on config or runtime state
 
@@ -257,3 +275,39 @@ Safety constraints now applied in `tools`:
 
 - Session-scoped spawn budget for sub-agent creation
 - Recursion guard to block Syndicate -> Syndicate spawning loops
+
+## Semantic Indexing
+
+PR #3 added a local embedding-based codebase indexer that runs entirely in-process via the Candle ML framework (pure Rust, no Python or external services).
+
+### Architecture
+
+```
+  startup (once per process)
+    ├── ConfigLoader reads indexing config from .eidolon.json
+    ├── ensure_indexer_started() — OnceLock guard, idempotent
+    │     ├── start_background_indexer() — spawns OS thread
+    │     │     ├── ensure_model() — download all-MiniLM-L6-v2 via hf-hub
+    │     │     ├── load_model() — BertModel from safetensors
+    │     │     ├── load_cache() — attempt warm start from bincode
+    │     │     ├── build_index() — discover → chunk → hash → embed
+    │     │     ├── save_cache() — atomic write to .eidolon/index/
+    │     │     └── publish embedder + index via OnceLock
+    │     └── init_index_handle() — store in tools global
+    └── IndexHandle cloned into ConversationRuntime
+
+  per turn
+    ├── build_auto_context(user_message)
+    │     ├── embed user message via IndexHandle
+    │     ├── cosine similarity search (top-K, threshold 0.3)
+    │     └── inject <codebase_context> into system prompt
+    └── model can call semantic_search tool for explicit queries
+```
+
+### Key Design Decisions
+
+- **OS thread, not async** — Candle inference is CPU-bound; running on a dedicated thread avoids starving the tokio runtime
+- **OnceLock publishing** — the embedder is published before the index so that `is_ready()` never returns true when `query()` would fail
+- **Incremental rebuilds** — each file is SHA-256 hashed; unchanged files reuse cached embeddings
+- **Budget-capped injection** — auto-context is limited to 8000 characters to avoid overwhelming the system prompt
+- **Graceful degradation** — if indexing is disabled, the model fails, or the index is still building, all code paths return `None` / fallback messages

@@ -125,6 +125,7 @@ The agent runtime has access to a core set of built-in tools. Each tool call pas
 | `edit_file` | Apply targeted string replacements |
 | `glob_search` | Find files by glob pattern |
 | `grep_search` | Search file contents with regex |
+| `semantic_search` | Search the codebase by meaning using local embeddings |
 | `Skill` | Invoke a skill from `.eidolon/skills/`, `.agents/skills/`, `.claude/skills/` |
 | `Agent` | Spawn a sub-agent for parallel work |
 | `SyndicateMemoryWrite` | Write session-scoped shared memory during syndicate runs |
@@ -135,6 +136,38 @@ The agent runtime has access to a core set of built-in tools. Each tool call pas
 | `TodoWrite` | Update the todo list |
 
 Additional tools come from MCP servers configured in your project — they appear alongside built-in tools and go through the same permission and hook pipeline.
+
+## Semantic Search
+
+When indexing is enabled (see [Configuration](configuration.md)), the agent gains deep codebase awareness through two mechanisms:
+
+### Automatic Context Injection
+
+Every conversation turn, the user's message is embedded and compared against the workspace index. The top-K most relevant code snippets are automatically injected into the system prompt as a `<codebase_context>` section. This happens transparently — no action required from the user or the model.
+
+### The `semantic_search` Tool
+
+The model can also explicitly query the index:
+
+```json
+{
+  "query": "how does permission enforcement work",
+  "top_k": 5
+}
+```
+
+This returns ranked results with file paths, line ranges, similarity scores, and code content. It's useful when the model needs to find code related to a concept rather than an exact string match (which `grep_search` handles).
+
+### When to Use Which
+
+| Need | Tool |
+|---|---|
+| Find an exact string or regex | `grep_search` |
+| Find files by name pattern | `glob_search` |
+| Find code related to a concept | `semantic_search` |
+| Read a specific file | `read_file` |
+
+The auto-context injection means the model often already has relevant code in its context before it even decides to search. This reduces the number of tool calls needed per turn.
 
 ## Skills
 
