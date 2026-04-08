@@ -1,11 +1,11 @@
 # Eidolon
 
 <p align="center">
-  <img src="assets/eidolon-hero.png" alt="Eidolon" width="600" />
+  <img src="assets/eidolon-hero-2.png" alt="Eidolon" width="800" />
 </p>
 
 <p align="center">
-  <strong>A research-driven, general-purpose agent runtime — built in Rust to be embedded, extended, and pointed at any domain.</strong>
+  <strong>A general-purpose agent runtime — built in Rust to be embedded, extended, and pointed at any domain.</strong>
 </p>
 
 <p align="center">
