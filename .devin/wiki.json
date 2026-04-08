@@ -1,0 +1,283 @@
+{
+  "repo_notes": [
+    {
+      "content": "do not talk about the claude code codebase inspiration/parity part of the codebase, mention syndicate mode all over where relevant and give it a section, have a visionary/innovative tone in the overview."
+    }
+  ],
+  "pages": [
+    {
+      "title": "Overview",
+      "purpose": "High-level introduction to Eidolon CLI — what it is, why it exists, the Regula Framework philosophy, and how the two major workspaces (Rust implementation and Python reference) relate. Links to all major child sections.",
+      "page_notes": [
+        {
+          "content": ""
+        }
+      ]
+    },
+    {
+      "title": "Getting Started",
+      "purpose": "Step-by-step guide for building from source, authenticating (API key and OAuth PKCE), running the first REPL session, and using the /doctor command to validate the environment. Covers prerequisites, container workflow, and project initialization.",
+      "parent": "Overview",
+      "page_notes": [
+        {
+          "content": ""
+        }
+      ]
+    },
+    {
+      "title": "Usage Guide",
+      "purpose": "Comprehensive reference for all running modes (REPL, one-shot prompt, JSON output), CLI flags, model aliases, slash commands, session management, and Syndicate mode invocation from the command line.",
+      "parent": "Overview",
+      "page_notes": [
+        {
+          "content": ""
+        }
+      ]
+    },
+    {
+      "title": "Rust Workspace Architecture",
+      "purpose": "Overview of the eight-crate Rust workspace structure, the layered dependency model, and how the binary crate (eidolon-cli) sits atop the library crates. Links to child pages for each major subsystem.",
+      "page_notes": [
+        {
+          "content": ""
+        }
+      ]
+    },
+    {
+      "title": "eidolon-cli Binary Crate",
+      "purpose": "Deep dive into the CLI binary: argument parsing, REPL loop, TUI rendering with crossterm/rustyline/syntect, slash command dispatch, session I/O, OAuth flow, and the CliAction dispatch table (Repl, Prompt, Login, Doctor, Syndicate).",
+      "parent": "Rust Workspace Architecture",
+      "page_notes": [
+        {
+          "content": ""
+        }
+      ]
+    },
+    {
+      "title": "Runtime Crate — Core Engine",
+      "purpose": "Detailed coverage of the runtime crate: conversation loop, config resolution and merging, session persistence (JSONL), prompt assembly, permission enforcement, sandbox management, OAuth, SSE streaming, and the full module inventory of runtime/src/.",
+      "parent": "Rust Workspace Architecture",
+      "page_notes": [
+        {
+          "content": ""
+        }
+      ]
+    },
+    {
+      "title": "Permission and Policy System",
+      "purpose": "Explains the three permission modes (read-only, workspace-write, danger-full-access), the PermissionEnforcer gatekeeper, the policy engine, trust resolver, and how tool calls are validated before execution.",
+      "parent": "Rust Workspace Architecture",
+      "page_notes": [
+        {
+          "content": ""
+        }
+      ]
+    },
+    {
+      "title": "Session Management and Compaction",
+      "purpose": "Covers JSONL session storage, session naming conventions, session resumption (--resume latest), token-aware compaction via compact_session(), summary compression, and the session_control module.",
+      "parent": "Rust Workspace Architecture",
+      "page_notes": [
+        {
+          "content": ""
+        }
+      ]
+    },
+    {
+      "title": "MCP Integration",
+      "purpose": "Explains the Model Context Protocol subsystem: McpServerManager lifecycle, transport types (stdio, websocket, remote, managed_proxy), mcp_tool_bridge translation to GlobalToolRegistry, McpLifecycleValidator, and the mcp_client transport implementations.",
+      "parent": "Rust Workspace Architecture",
+      "page_notes": [
+        {
+          "content": ""
+        }
+      ]
+    },
+    {
+      "title": "Syndicate Multi-Agent Orchestration",
+      "purpose": "Covers the Syndicate subsystem: collection discovery, SyndicateOrchestrator, shared SyndicateMemory (Write/Read/Log/Search), spawn safety guards (session spawn cap, recursion protection), task packets, task registry, team/cron registries, and worker boot.",
+      "parent": "Rust Workspace Architecture",
+      "page_notes": [
+        {
+          "content": ""
+        }
+      ]
+    },
+    {
+      "title": "API Crate — LLM Provider Abstraction",
+      "purpose": "Documents the api crate: the Provider trait, AnthropicClient, OpenAI-compatible client, SSE streaming, prompt caching, error types, and how detect_provider_kind() selects the backend. Covers the three supported providers (Anthropic, OpenAI, xAI Grok).",
+      "parent": "Rust Workspace Architecture",
+      "page_notes": [
+        {
+          "content": ""
+        }
+      ]
+    },
+    {
+      "title": "Tools Crate — Tool Registry and Execution",
+      "purpose": "Explains the GlobalToolRegistry, ToolSpec definitions for all built-in tools (bash, read_file, write_file, edit_file, glob_search, grep_search, Agent, Skill, Syndicate memory tools, etc.), permission-gated dispatch via execute_tool_with_enforcer(), and lane completion.",
+      "parent": "Rust Workspace Architecture",
+      "page_notes": [
+        {
+          "content": ""
+        }
+      ]
+    },
+    {
+      "title": "Commands Crate — Slash Command Registry",
+      "purpose": "Documents the slash command system: slash_command_specs() declarative registry, SlashCommandSpec structure, dispatch_slash_command(), and the full list of built-in slash commands (/doctor, /status, /model, /permissions, /syndicate, /mcp, /skills, /plugins, etc.).",
+      "parent": "Rust Workspace Architecture",
+      "page_notes": [
+        {
+          "content": ""
+        }
+      ]
+    },
+    {
+      "title": "Plugins Crate — Hook System",
+      "purpose": "Covers the plugin architecture: plugin kinds (builtin, bundled, external), plugin.json manifest format, hook events (PreToolUse, PostToolUse, PostToolUseFailure), HookRunner execution, plugin lifecycle (discovery, healthcheck, registration), and bundled example plugins.",
+      "parent": "Rust Workspace Architecture",
+      "page_notes": [
+        {
+          "content": ""
+        }
+      ]
+    },
+    {
+      "title": "Telemetry Crate",
+      "purpose": "Documents the telemetry crate: ClientIdentity, AnthropicRequestProfile, request tracing headers (anthropic-version, beta flags), analytics event logging to JSONL, and how telemetry integrates with the conversation loop.",
+      "parent": "Rust Workspace Architecture",
+      "page_notes": [
+        {
+          "content": ""
+        }
+      ]
+    },
+    {
+      "title": "Mock Anthropic Service — Testing Harness",
+      "purpose": "Explains the mock-anthropic-service crate used for integration testing: how it reads mock_parity_scenarios.json to serve deterministic LLM responses, the mock parity harness test pattern, and how it replaces real API calls in the test suite.",
+      "parent": "Rust Workspace Architecture",
+      "page_notes": [
+        {
+          "content": ""
+        }
+      ]
+    },
+    {
+      "title": "Configuration System",
+      "purpose": "Overview of the layered JSON configuration system, environment variables, and the project directory structure. Links to child pages for the config hierarchy and MCP server configuration.",
+      "page_notes": [
+        {
+          "content": ""
+        }
+      ]
+    },
+    {
+      "title": "Configuration Hierarchy and Schema",
+      "purpose": "Details the five-level config merge order (~/.eidolon.json → XDG → project .eidolon.json → .eidolon/settings.json → .eidolon/settings.local.json), all configuration keys (model, permissions, tools, mcpServers), environment variable overrides, and the /config REPL command.",
+      "parent": "Configuration System",
+      "page_notes": [
+        {
+          "content": ""
+        }
+      ]
+    },
+    {
+      "title": "Project Directory Structure and Instruction Files",
+      "purpose": "Documents the .eidolon/ project directory layout: sessions/, skills/, plugins/installed/, instructions.md, settings.local.json. Explains how CLAUDE.md, .eidolon/instructions.md, and ~/.eidolon/instructions.md are aggregated into the system prompt.",
+      "parent": "Configuration System",
+      "page_notes": [
+        {
+          "content": ""
+        }
+      ]
+    },
+    {
+      "title": "Python Porting Workspace",
+      "purpose": "Overview of the src/ Python reference workspace — its role as a structural mirror of the original TypeScript Claude Code codebase, how it relates to the Rust implementation, and the parity audit mechanism. Links to child pages for the workspace internals.",
+      "page_notes": [
+        {
+          "content": ""
+        }
+      ]
+    },
+    {
+      "title": "Workspace Structure and CLI Entrypoint",
+      "purpose": "Documents src/main.py as the Python workspace CLI, all subcommands (summary, manifest, parity-audit, commands, tools, route, bootstrap, turn-loop, etc.), the PortManifest, PortRuntime, and QueryEnginePort classes, and how the workspace is organized.",
+      "parent": "Python Porting Workspace",
+      "page_notes": [
+        {
+          "content": ""
+        }
+      ]
+    },
+    {
+      "title": "Reference Data and Parity Audit",
+      "purpose": "Explains the reference_data/ directory: commands_snapshot.json, tools_snapshot.json, archive_surface_snapshot.json, and the 29 subsystem JSON files. Documents the parity_audit.py module and how it measures coverage against the archived TypeScript snapshot.",
+      "parent": "Python Porting Workspace",
+      "page_notes": [
+        {
+          "content": ""
+        }
+      ]
+    },
+    {
+      "title": "Subsystem Placeholder Packages",
+      "purpose": "Explains the pattern of Python placeholder packages (assistant, bridge, buddy, cli, coordinator, etc.) that mirror TypeScript subsystem directories, how _archive_helper.py loads metadata from reference_data/subsystems/*.json, and what MODULE_COUNT/SAMPLE_FILES expose.",
+      "parent": "Python Porting Workspace",
+      "page_notes": [
+        {
+          "content": ""
+        }
+      ]
+    },
+    {
+      "title": "Development Guide",
+      "purpose": "Overview of contributing to Eidolon: workspace standards, testing strategy, and extension patterns. Links to child pages for adding tools/commands/providers and the testing infrastructure.",
+      "page_notes": [
+        {
+          "content": ""
+        }
+      ]
+    },
+    {
+      "title": "Adding Tools, Commands, and Providers",
+      "purpose": "Step-by-step guide for extending Eidolon: implementing a new ToolSpec and registering it in mvp_tool_specs(), adding a SlashCommandSpec to slash_command_specs(), implementing the Provider trait for a new LLM backend, and creating a plugin with a plugin.json manifest.",
+      "parent": "Development Guide",
+      "page_notes": [
+        {
+          "content": ""
+        }
+      ]
+    },
+    {
+      "title": "Testing Infrastructure",
+      "purpose": "Documents the test strategy: mock_parity_harness.rs and mock_parity_scenarios.json for integration tests, cli_flags_and_config_defaults.rs, output_format_contract.rs, resume_slash_commands.rs, the env_lock() mutex for environment variable safety, normalize_path_sep() for cross-platform tests, and the Python test suite in tests/test_porting_workspace.py.",
+      "parent": "Development Guide",
+      "page_notes": [
+        {
+          "content": ""
+        }
+      ]
+    },
+    {
+      "title": "Code Standards and Build System",
+      "purpose": "Covers workspace-wide Rust standards: #![forbid(unsafe_code)], clippy pedantic lints, cargo fmt enforcement, error handling conventions (ApiError, RuntimeError vs String tool errors), the Containerfile-based dev environment, and the rust/scripts/ helper scripts.",
+      "parent": "Development Guide",
+      "page_notes": [
+        {
+          "content": ""
+        }
+      ]
+    },
+    {
+      "title": "Glossary",
+      "purpose": "Definitions of all codebase-specific terms, jargon, abbreviations, and domain concepts that an onboarding engineer needs to know, with code pointers to relevant files and types.",
+      "page_notes": [
+        {
+          "content": ""
+        }
+      ]
+    }
+  ]
+}
