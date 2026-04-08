@@ -1,6 +1,6 @@
 # Usage Guide
 
-Eidolon operates as an interactive agent runtime with multiple execution modes — from a persistent REPL for exploratory coding to one-shot commands for automation and pipeline integration.
+Eidolon operates as an interactive agent runtime with multiple execution modes — from a persistent REPL for exploratory work to one-shot commands for automation and pipeline integration. While the current tool suite is coding-native, the runtime interfaces described here are domain-independent by design.
 
 ## Running Modes
 
@@ -157,7 +157,7 @@ Additional tools come from MCP servers configured in your project — they appea
 
 ## Semantic Search
 
-When indexing is enabled (see [Configuration](configuration.md)), the agent gains deep codebase awareness through two mechanisms:
+When indexing is enabled (see [Configuration](configuration.md)), the agent gains deep workspace awareness through two mechanisms. The embedding model is **configurable** — any BERT-compatible model on HuggingFace works via the `modelId` config key. The default `all-MiniLM-L6-v2` (~80 MB) is fast and capable; swap it for a larger model when accuracy matters more.
 
 ### Automatic Context Injection
 
@@ -247,7 +247,7 @@ Manage agents with `/agents`:
 
 ## Syndicate Mode
 
-Syndicate mode coordinates a collection of specialized sub-agents around one shared task.
+Syndicate is a **framework for defining agent team topologies** — the built-in collections (`feature-build`, `code-review`, `debug-squad`) are demos that ship with the runtime. Define custom collections for any coordination pattern: migration pipelines, security audits, content workflows, or any domain-specific agent team.
 
 Run from CLI:
 
@@ -266,9 +266,11 @@ Or from REPL:
 
 Syndicate runs provide:
 
-- Shared session memory for coordination (`SyndicateMemory*` tools)
+- Session-scoped shared memory for coordination (`SyndicateMemory*` tools)
 - Per-agent lifecycle tracking in the final summary
 - Spawn safety protections (session spawn cap and recursion guard)
+
+Custom collections are defined in workspace files — each agent gets a role, system prompt, optional model override, and access to the shared memory tools. See [Architecture](architecture.md) for the orchestration design.
 
 ## Common Workflows
 

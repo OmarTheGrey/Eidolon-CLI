@@ -1,6 +1,16 @@
 # Architecture
 
-Eidolon is a modular agent runtime built in Rust, designed following the **Regula Framework** — a set of agentic design patterns focused on structured autonomy, deterministic recovery, and machine-first interfaces. Every subsystem (tool execution, permission enforcement, session management, MCP integration) is exposed as a composable, overridable surface, making the entire system embeddable into larger orchestration pipelines.
+Eidolon is a modular, research-driven agent runtime built in Rust, designed following the **Regula Framework** — a set of agentic design patterns focused on structured autonomy, deterministic recovery, and machine-first interfaces.
+
+Every subsystem (tool execution, permission enforcement, session management, MCP integration, semantic indexing) is exposed as a composable, overridable surface, making the entire system embeddable into larger orchestration pipelines. Critically, **none of these subsystems are inherently coupled to software engineering** — the architecture is designed to generalize across knowledge-work domains.
+
+## Design Philosophy
+
+Eidolon's architecture optimizes for three properties:
+
+1. **Domain independence** — The runtime dispatches tools, enforces permissions, runs hooks, manages sessions, and coordinates agents. What those tools *do* is a configuration detail. The current tool suite is coding-native, but the runtime doesn't know or care.
+2. **Composability** — Every mechanism (`ToolExecutor`, `ApiClient`, `PermissionPolicy`, prompt builder, hook pipeline) is a replaceable surface. Swap any component without rewriting the conversation loop.
+3. **Observability** — Structured I/O everywhere. JSON output on every command, machine-readable sessions, visualized retrieval trajectories (planned), and plugin hooks that let external processes monitor and control every tool call.
 
 ## High-Level Overview
 
@@ -332,3 +342,35 @@ PR #3 added a local embedding-based codebase indexer that runs entirely in-proce
 - **Incremental rebuilds** — each file is SHA-256 hashed; unchanged files reuse cached embeddings
 - **Budget-capped injection** — auto-context is limited to 8000 characters to avoid overwhelming the system prompt
 - **Graceful degradation** — if indexing is disabled, the model fails, or the index is still building, all code paths return `None` / fallback messages
+- **Model-agnostic pipeline** — the `modelId` config key accepts any HuggingFace BERT-compatible model. Vector dimensions adapt automatically; the tokenizer loads from whatever model is specified. The default `all-MiniLM-L6-v2` (~80 MB) balances speed and quality, but larger models work transparently.
+
+## Future Architecture: Eidolon Context Engine
+
+The semantic indexing pipeline is the foundation for a more ambitious context management system planned as the next major architectural addition.
+
+The **Eidolon Context Engine** replaces flat vector retrieval with a structured, tiered virtual filesystem:
+
+```
+eidolon://
+├── resources/              # Project docs, repos, data sources
+│   └── my_project/
+│       ├── .abstract       # L0: ~100 tokens — quick relevance check
+│       ├── .overview        # L1: ~2K tokens — structure and key points
+│       └── src/             # L2: full content — loaded on demand
+├── user/                   # User preferences, working patterns
+│   └── memories/
+└── agent/                  # Agent skills, instructions, task memories
+    ├── skills/
+    └── memories/
+```
+
+Key architectural properties:
+
+- **Tiered loading (L0/L1/L2)** — agents start at one-sentence abstracts, drill to overviews for planning, and only load full content when genuinely needed. Dramatically reduces token consumption for broad tasks.
+- **Directory recursive retrieval** — multi-phase search that locks the highest-scoring directory, refines within it, and recurses through subdirectories. Finds context with full structural awareness.
+- **Visualized retrieval trajectories** — every retrieval produces an inspectable trace of which directories were browsed and why, making context management a debuggable system rather than a black box.
+- **Automatic session memory** — at session boundaries, the engine extracts user preferences and agent experience, updating memory directories so the agent improves with use.
+
+The existing indexing crate becomes the L2 ingestion layer. The permission system governs `eidolon://` path access. Syndicate agents share context through the same filesystem. Plugin hooks fire on context operations. The current architecture is designed to absorb this cleanly.
+
+See the [Roadmap](../ROADMAP.md) for the full plan.

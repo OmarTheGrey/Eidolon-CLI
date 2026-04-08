@@ -1,6 +1,6 @@
 # Development Guide
 
-Guide for contributing to or extending the Eidolon agent runtime. The architecture is intentionally modular — adding a new tool, command, provider, or plugin should never require modifying the core conversation loop.
+Guide for contributing to or extending the Eidolon agent runtime. The architecture is intentionally modular — adding a new tool, command, provider, or plugin should never require modifying the core conversation loop. This modularity is a deliberate design choice: Eidolon is built to generalize beyond coding, and every extension point is designed to be domain-independent.
 
 ## Workspace Layout
 
@@ -199,12 +199,13 @@ The system prompt is assembled in `runtime/src/prompt.rs` from project context, 
 
 ### Indexing Pipeline
 
-The semantic indexer lives in the `indexing` crate, which is a self-contained pipeline with no runtime dependencies. To extend it:
+The semantic indexer lives in the `indexing` crate, which is a self-contained pipeline with no runtime dependencies — you could yank it out and use it in a completely different project. To extend it:
 
 - **Add file filters** in `indexing/src/discovery.rs` — modify `is_excluded_extension()` or the walker config
 - **Change chunking strategy** in `indexing/src/chunker.rs` — the current approach is line-based sliding windows
-- **Swap models** by changing `modelId` in config — any HuggingFace BERT-compatible model works (output dimensions adjust automatically)
-- **Improve search** in `indexing/src/search.rs` — currently brute-force; could be replaced with HNSW for larger codebases
+- **Swap models** by changing `modelId` in config — any HuggingFace BERT-compatible model works (output dimensions adjust automatically via `Vec<f32>`)
+- **Improve search** in `indexing/src/search.rs` — currently brute-force cosine similarity; could be replaced with HNSW for larger corpora
+- **Extend beyond code** — the pipeline is not inherently code-specific. It chunks text, embeds it, and searches it. Future work will generalize it for document corpora (see [Roadmap](../ROADMAP.md))
 
 The runtime wraps indexing in `runtime/src/indexer.rs` (`BackgroundIndexer` + `IndexHandle`). For testing, use `IndexHandle::ready_for_test()` or `IndexHandle::not_ready_for_test()` constructors (available under `#[cfg(test)]` or the `test-support` feature).
 
