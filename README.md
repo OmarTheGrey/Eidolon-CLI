@@ -8,7 +8,7 @@
   <strong>A fully extensible AI coding agent harness — built to be embedded, extended, and composed.</strong>
 </p>
 
-[![Ask DeepWiki](https://deepwiki.com/badge.svg)](https://deepwiki.com/OmarTheGrey/Eidolon-CLI)
+
 ---
 
 Eidolon is an agentic coding system built from the ground up in Rust, inspired by Copilot-CLI, ClaudeCode and Opencode. It provides an interactive terminal interface for LLM-driven coding workflows, with a modular architecture designed around extensible **tools**, **skills**, **plugins**, and **sub-agents**.
@@ -16,6 +16,7 @@ Eidolon is an agentic coding system built from the ground up in Rust, inspired b
 Unlike a simple chat wrapper, Eidolon is built as an **agent runtime** — a system where every internal mechanism (tool execution, permission enforcement, session management, prompt construction, MCP integration) is exposed as a composable, overridable surface. The goal is a coding harness that can be embedded into larger autonomous systems, orchestration pipelines, and multi-agent architectures.
 
 This project is built following the **Regula Framework** — a set of agentic design patterns focused on structured autonomy, deterministic recovery, and machine-first interfaces for AI agent coordination.
+[![Ask DeepWiki](https://deepwiki.com/badge.svg)](https://deepwiki.com/OmarTheGrey/Eidolon-CLI)
 
 ## What Eidolon Does
 
