@@ -2193,10 +2193,11 @@ fn run_semantic_search(input: SemanticSearchInput) -> Result<String, String> {
     let items: Vec<serde_json::Value> = results
         .iter()
         .map(|r| {
+            let rounded_score = (f64::from(r.score) * 1000.0).round() / 1000.0;
             json!({
                 "file": r.meta.file_path.display().to_string(),
                 "lines": format!("{}-{}", r.meta.start_line, r.meta.end_line),
-                "score": format!("{:.3}", r.score),
+                "score": rounded_score,
                 "content": r.meta.content
             })
         })
@@ -5492,6 +5493,33 @@ mod tests {
         assert!(names.contains(&"WorkerObserve"));
         assert!(names.contains(&"WorkerAwaitReady"));
         assert!(names.contains(&"WorkerSendPrompt"));
+        assert!(names.contains(&"semantic_search"));
+    }
+
+    #[test]
+    fn semantic_search_returns_error_when_not_initialized() {
+        use super::{run_semantic_search, SemanticSearchInput};
+
+        let result = run_semantic_search(SemanticSearchInput {
+            query: "hello world".into(),
+            top_k: None,
+        });
+
+        assert!(result.is_err());
+        assert!(result
+            .unwrap_err()
+            .contains("semantic indexing is disabled"));
+    }
+
+    #[test]
+    fn semantic_search_defaults_top_k_when_omitted() {
+        use super::SemanticSearchInput;
+
+        let input = SemanticSearchInput {
+            query: "test".into(),
+            top_k: None,
+        };
+        assert_eq!(input.top_k.unwrap_or(10), 10);
     }
 
     #[test]

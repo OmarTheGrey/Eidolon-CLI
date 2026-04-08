@@ -81,11 +81,15 @@ fn is_excluded_extension(path: &Path, excluded: &[String]) -> bool {
 
 /// Heuristic: a file is likely binary if its first 8 KB contain a null byte.
 fn is_likely_binary(path: &Path) -> bool {
-    let Ok(data) = fs::read(path) else {
+    use std::io::Read;
+    let Ok(file) = fs::File::open(path) else {
         return true; // unreadable → skip
     };
-    let check_len = data.len().min(8192);
-    data[..check_len].contains(&0)
+    let mut buf = [0u8; 8192];
+    let Ok(n) = file.take(8192).read(&mut buf) else {
+        return true;
+    };
+    buf[..n].contains(&0)
 }
 
 #[cfg(test)]

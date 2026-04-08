@@ -30,9 +30,13 @@ struct IndexHandleInner {
 
 impl IndexHandle {
     /// Whether the index is ready for queries.
+    ///
+    /// Returns `true` only when *both* the index and the embedder have been
+    /// published by the background thread, so `query()` is guaranteed to
+    /// succeed.
     #[must_use]
     pub fn is_ready(&self) -> bool {
-        self.inner.index.get().is_some()
+        self.inner.index.get().is_some() && self.inner.embedder.get().is_some()
     }
 
     /// Current build progress, if the indexer is still running.
@@ -71,6 +75,37 @@ impl IndexHandle {
     #[must_use]
     pub fn config(&self) -> &IndexConfig {
         &self.inner.config
+    }
+
+    /// Create a handle that is immediately ready with the given index and
+    /// embedder. Intended for unit tests that need a working `IndexHandle`
+    /// without spawning the background thread.
+    #[cfg(any(test, feature = "test-support"))]
+    #[must_use]
+    pub fn ready_for_test(config: IndexConfig, index: WorkspaceIndex, embedder: Embedder) -> Self {
+        let inner = Arc::new(IndexHandleInner {
+            index: OnceLock::new(),
+            progress: Mutex::new(None),
+            embedder: OnceLock::new(),
+            config,
+        });
+        let _ = inner.embedder.set(embedder);
+        let _ = inner.index.set(index);
+        Self { inner }
+    }
+
+    /// Create a handle that will never become ready (no background thread).
+    /// Useful for testing the "index not ready" paths.
+    #[cfg(any(test, feature = "test-support"))]
+    #[must_use]
+    pub fn not_ready_for_test(config: IndexConfig) -> Self {
+        let inner = Arc::new(IndexHandleInner {
+            index: OnceLock::new(),
+            progress: Mutex::new(None),
+            embedder: OnceLock::new(),
+            config,
+        });
+        Self { inner }
     }
 }
 
@@ -137,9 +172,11 @@ fn run_indexer(
     // 5. Persist cache (best-effort).
     let _ = save_cache(&index, &cache_dir);
 
-    // 6. Publish.
-    let _ = inner.index.set(index);
+    // 6. Publish embedder first so that `is_ready()` (which checks both)
+    //    never observes a state where the index exists but the embedder
+    //    does not.
     let _ = inner.embedder.set(embedder);
+    let _ = inner.index.set(index);
 
     Ok(())
 }

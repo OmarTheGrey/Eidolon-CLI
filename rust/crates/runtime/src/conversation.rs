@@ -1744,4 +1744,83 @@ mod tests {
         // then
         assert_eq!(error.to_string(), "upstream failed");
     }
+
+    #[test]
+    fn system_prompt_unchanged_when_no_index_handle() {
+        use std::sync::Mutex;
+
+        struct CapturingApi {
+            captured: Arc<Mutex<Option<Vec<String>>>>,
+        }
+
+        impl ApiClient for CapturingApi {
+            fn stream(&mut self, request: ApiRequest) -> Result<Vec<AssistantEvent>, RuntimeError> {
+                *self.captured.lock().unwrap() = Some(request.system_prompt);
+                Ok(vec![
+                    AssistantEvent::TextDelta("ok".into()),
+                    AssistantEvent::MessageStop,
+                ])
+            }
+        }
+
+        let captured: Arc<Mutex<Option<Vec<String>>>> = Arc::new(Mutex::new(None));
+        let mut runtime = ConversationRuntime::new(
+            Session::new(),
+            CapturingApi {
+                captured: Arc::clone(&captured),
+            },
+            StaticToolExecutor::new(),
+            PermissionPolicy::new(PermissionMode::DangerFullAccess),
+            vec!["base system prompt".to_string()],
+        );
+
+        runtime
+            .run_turn("hello", None)
+            .expect("turn should succeed");
+
+        let prompt = captured.lock().unwrap().take().unwrap();
+        assert_eq!(prompt, vec!["base system prompt".to_string()]);
+    }
+
+    #[test]
+    fn auto_context_skipped_when_index_not_ready() {
+        use crate::indexer::IndexHandle;
+        use indexing::IndexConfig;
+        use std::sync::Mutex;
+
+        struct CapturingApi {
+            captured: Arc<Mutex<Option<Vec<String>>>>,
+        }
+
+        impl ApiClient for CapturingApi {
+            fn stream(&mut self, request: ApiRequest) -> Result<Vec<AssistantEvent>, RuntimeError> {
+                *self.captured.lock().unwrap() = Some(request.system_prompt);
+                Ok(vec![
+                    AssistantEvent::TextDelta("ok".into()),
+                    AssistantEvent::MessageStop,
+                ])
+            }
+        }
+
+        let captured: Arc<Mutex<Option<Vec<String>>>> = Arc::new(Mutex::new(None));
+        let handle = IndexHandle::not_ready_for_test(IndexConfig::default());
+        let mut runtime = ConversationRuntime::new(
+            Session::new(),
+            CapturingApi {
+                captured: Arc::clone(&captured),
+            },
+            StaticToolExecutor::new(),
+            PermissionPolicy::new(PermissionMode::DangerFullAccess),
+            vec!["base".to_string()],
+        )
+        .with_index_handle(handle);
+
+        runtime
+            .run_turn("search for something", None)
+            .expect("turn should succeed");
+
+        let prompt = captured.lock().unwrap().take().unwrap();
+        // No <codebase_context> should be appended since the index is not ready.
+        assert_eq!(prompt, vec!["base".to_string()]);
+    }
 }

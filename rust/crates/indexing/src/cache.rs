@@ -18,6 +18,12 @@ pub fn save_cache(index: &WorkspaceIndex, cache_dir: &Path) -> io::Result<()> {
     let bytes = bincode::serialize(index).map_err(io::Error::other)?;
 
     fs::write(&tmp_path, &bytes)?;
+
+    // On Windows `fs::rename` fails when the destination already exists.
+    // Remove the destination first to make the atomic replace cross-platform.
+    if final_path.exists() {
+        fs::remove_file(&final_path)?;
+    }
     fs::rename(&tmp_path, &final_path)?;
     Ok(())
 }

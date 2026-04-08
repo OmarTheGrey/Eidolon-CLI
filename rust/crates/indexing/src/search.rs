@@ -45,19 +45,16 @@ pub fn search_with_threshold(
     scored
 }
 
-/// Cosine similarity between two vectors.
+/// Cosine similarity between two pre-normalised vectors.
 ///
-/// When both vectors are L2-normalised this reduces to the dot product.
+/// Returns `0.0` if the vectors have different dimensions or are empty.
+/// When both vectors are L2-normalised this is just the dot product.
 fn cosine_similarity(a: &[f32], b: &[f32]) -> f32 {
-    let dot: f32 = a.iter().zip(b.iter()).map(|(x, y)| x * y).sum();
-    let norm_a: f32 = a.iter().map(|x| x * x).sum::<f32>().sqrt();
-    let norm_b: f32 = b.iter().map(|x| x * x).sum::<f32>().sqrt();
-    let denom = norm_a * norm_b;
-    if denom == 0.0 {
-        0.0
-    } else {
-        dot / denom
+    if a.len() != b.len() || a.is_empty() {
+        return 0.0;
     }
+
+    a.iter().zip(b.iter()).map(|(x, y)| x * y).sum()
 }
 
 #[cfg(test)]
