@@ -358,18 +358,15 @@ fn load_collections_from_dir(
                 }
             }
             Err(e) => {
-                eprintln!(
-                    "syndicate: skipping {}: {e}",
-                    path.display()
-                );
+                eprintln!("syndicate: skipping {}: {e}", path.display());
             }
         }
     }
 }
 
 fn load_collection_file(path: &Path) -> Result<SyndicateCollection, String> {
-    let contents = std::fs::read_to_string(path)
-        .map_err(|e| format!("read {}: {e}", path.display()))?;
+    let contents =
+        std::fs::read_to_string(path).map_err(|e| format!("read {}: {e}", path.display()))?;
     toml_parse(&contents)
 }
 

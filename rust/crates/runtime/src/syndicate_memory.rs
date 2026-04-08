@@ -81,8 +81,7 @@ impl SyndicateMemory {
         let mut log = Vec::new();
 
         if path.exists() {
-            let file =
-                std::fs::File::open(path).map_err(|e| format!("open memory file: {e}"))?;
+            let file = std::fs::File::open(path).map_err(|e| format!("open memory file: {e}"))?;
             let reader = std::io::BufReader::new(file);
             for (idx, line) in reader.lines().enumerate() {
                 let line = line.map_err(|e| format!("read memory line: {e}"))?;
@@ -319,8 +318,8 @@ mod tests {
 
     #[test]
     fn persistence_round_trip() {
-        let dir = std::env::temp_dir()
-            .join(format!("eidolon_syndicate_mem_test_{}", std::process::id()));
+        let dir =
+            std::env::temp_dir().join(format!("eidolon_syndicate_mem_test_{}", std::process::id()));
         let _ = fs::remove_dir_all(&dir);
         fs::create_dir_all(&dir).unwrap();
         let path = dir.join("memory.jsonl");
@@ -360,7 +359,8 @@ mod tests {
     #[test]
     fn is_empty_ignores_log_entries() {
         let mem = SyndicateMemory::new();
-        mem.append_log("agent-1", "observe", None, "only log").unwrap();
+        mem.append_log("agent-1", "observe", None, "only log")
+            .unwrap();
         assert!(mem.is_empty());
         assert_eq!(mem.len(), 0);
         assert_eq!(mem.log_len(), 1);

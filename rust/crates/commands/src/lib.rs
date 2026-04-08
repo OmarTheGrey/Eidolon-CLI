@@ -7,9 +7,8 @@ use std::path::{Path, PathBuf};
 
 use plugins::{PluginError, PluginManager, PluginSummary};
 use runtime::{
-    compact_session, CompactionConfig, ConfigLoader, ConfigSource, McpOAuthConfig, McpServerConfig,
-    ScopedMcpServerConfig, Session,
-    syndicate_collection::discover_collections,
+    compact_session, syndicate_collection::discover_collections, CompactionConfig, ConfigLoader,
+    ConfigSource, McpOAuthConfig, McpServerConfig, ScopedMcpServerConfig, Session,
 };
 use serde_json::{json, Value};
 
@@ -2442,7 +2441,9 @@ pub fn handle_syndicate_slash_command_json(args: Option<&str>, cwd: &Path) -> Va
                 }).collect::<Vec<_>>(),
             })
         }
-        _ => json!({ "kind": "syndicate_usage", "message": "Use /syndicate list or eidolon-cli syndicate <collection> \"<task>\"" }),
+        _ => {
+            json!({ "kind": "syndicate_usage", "message": "Use /syndicate list or eidolon-cli syndicate <collection> \"<task>\"" })
+        }
     }
 }
 
@@ -3580,7 +3581,8 @@ fn render_agents_usage(unexpected: Option<&str>) -> String {
         "Agents".to_string(),
         "  Usage            /agents [list|help]".to_string(),
         "  Direct CLI       eidolon agents".to_string(),
-        "  Sources          .eidolon/agents, ~/.eidolon/agents, $EIDOLON_CONFIG_HOME/agents".to_string(),
+        "  Sources          .eidolon/agents, ~/.eidolon/agents, $EIDOLON_CONFIG_HOME/agents"
+            .to_string(),
     ];
     if let Some(args) = unexpected {
         lines.push(format!("  Unexpected       {args}"));
@@ -3756,9 +3758,9 @@ fn definition_source_id(source: DefinitionSource) -> &'static str {
         DefinitionSource::UserEidolonConfigHome | DefinitionSource::UserCodexHome => {
             "user_eidolon_config_home"
         }
-        DefinitionSource::UserEidolon | DefinitionSource::UserCodex | DefinitionSource::UserClaude => {
-            "user_eidolon"
-        }
+        DefinitionSource::UserEidolon
+        | DefinitionSource::UserCodex
+        | DefinitionSource::UserClaude => "user_eidolon",
     }
 }
 
@@ -4891,8 +4893,9 @@ mod tests {
             super::handle_agents_slash_command(Some("help"), &cwd).expect("agents help");
         assert!(agents_help.contains("Usage            /agents [list|help]"));
         assert!(agents_help.contains("Direct CLI       eidolon agents"));
-        assert!(agents_help
-            .contains("Sources          .eidolon/agents, ~/.eidolon/agents, $EIDOLON_CONFIG_HOME/agents"));
+        assert!(agents_help.contains(
+            "Sources          .eidolon/agents, ~/.eidolon/agents, $EIDOLON_CONFIG_HOME/agents"
+        ));
 
         let agents_unexpected =
             super::handle_agents_slash_command(Some("show planner"), &cwd).expect("agents usage");
@@ -4904,7 +4907,8 @@ mod tests {
             .contains("Usage            /skills [list|install <path>|help|<skill> [args]]"));
         assert!(skills_help.contains("Alias            /skill"));
         assert!(skills_help.contains("Invoke           /skills help overview -> $help overview"));
-        assert!(skills_help.contains("Install root     $EIDOLON_CONFIG_HOME/skills or ~/.eidolon/skills"));
+        assert!(skills_help
+            .contains("Install root     $EIDOLON_CONFIG_HOME/skills or ~/.eidolon/skills"));
         assert!(skills_help.contains(".omc/skills"));
         assert!(skills_help.contains(".agents/skills"));
         assert!(skills_help.contains("~/.claude/skills/omc-learned"));

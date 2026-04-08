@@ -19,7 +19,7 @@ use std::ops::{Deref, DerefMut};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError, Sender};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, OnceLock};
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant, UNIX_EPOCH};
 
@@ -33,9 +33,8 @@ use api::{
 use commands::{
     classify_skills_slash_command, handle_agents_slash_command, handle_agents_slash_command_json,
     handle_mcp_slash_command, handle_mcp_slash_command_json, handle_plugins_slash_command,
-    handle_skills_slash_command, handle_skills_slash_command_json,
-    handle_syndicate_slash_command, handle_syndicate_slash_command_json,
-    render_slash_command_help,
+    handle_skills_slash_command, handle_skills_slash_command_json, handle_syndicate_slash_command,
+    handle_syndicate_slash_command_json, render_slash_command_help,
     resume_supported_slash_commands, slash_command_specs, validate_slash_command_input,
     SkillSlashDispatch, SlashCommand,
 };
@@ -48,12 +47,11 @@ use runtime::{
     pricing_for_model, resolve_sandbox_status, save_oauth_credentials,
     syndicate_collection::{discover_collections, SyndicateCollection},
     syndicate_orchestrator::{SyndicateOrchestrator, SyndicateRunConfig},
-    ApiClient, ApiRequest,
-    AssistantEvent, CompactionConfig, ConfigLoader, ConfigSource, ContentBlock,
-    ConversationMessage, ConversationRuntime, McpServerManager, McpTool, MessageRole, ModelPricing,
-    OAuthAuthorizationRequest, OAuthConfig, OAuthTokenExchangeRequest, PermissionMode,
-    PermissionPolicy, ProjectContext, PromptCacheEvent, ResolvedPermissionMode, RuntimeError,
-    Session, TokenUsage, ToolError, ToolExecutor, UsageTracker,
+    ApiClient, ApiRequest, AssistantEvent, CompactionConfig, ConfigLoader, ConfigSource,
+    ContentBlock, ConversationMessage, ConversationRuntime, McpServerManager, McpTool, MessageRole,
+    ModelPricing, OAuthAuthorizationRequest, OAuthConfig, OAuthTokenExchangeRequest,
+    PermissionMode, PermissionPolicy, ProjectContext, PromptCacheEvent, ResolvedPermissionMode,
+    RuntimeError, Session, TokenUsage, ToolError, ToolExecutor, UsageTracker,
 };
 use serde::Deserialize;
 use serde_json::{json, Map, Value};
@@ -1201,7 +1199,8 @@ fn check_auth_health() -> DiagnosticCheck {
             ];
             if expired {
                 details.push(
-                    "Suggested action  eidolon login to refresh local OAuth credentials".to_string(),
+                    "Suggested action  eidolon login to refresh local OAuth credentials"
+                        .to_string(),
                 );
             }
             DiagnosticCheck::new(
@@ -4671,7 +4670,7 @@ fn run_syndicate(
 
     let collection_name = collection.ok_or("collection name is required")?;
     let task_str = task.ok_or(
-        "task description is required. Usage: eidolon-cli syndicate <collection> \"<task>\""
+        "task description is required. Usage: eidolon-cli syndicate <collection> \"<task>\"",
     )?;
 
     // Resolve session directory
@@ -4687,10 +4686,7 @@ fn run_syndicate(
     let mut orchestrator = SyndicateOrchestrator::new(config, &cwd)?;
 
     if output_format == CliOutputFormat::Text {
-        println!(
-            "\n━━━ Syndicate: {} ━━━",
-            orchestrator.collection.name
-        );
+        println!("\n━━━ Syndicate: {} ━━━", orchestrator.collection.name);
         println!("Session: {}", orchestrator.session_id);
         println!("Task: {}", orchestrator.task);
         println!(
@@ -4715,14 +4711,8 @@ fn run_syndicate(
     for (i, def) in agent_defs.iter().enumerate() {
         orchestrator.mark_running(i);
         let agent_prompt = orchestrator.build_agent_prompt(def);
-        let task_prompt = format!(
-            "{}\n\n## Task\n{}",
-            agent_prompt, orchestrator.task
-        );
-        let agent_model = def
-            .model
-            .clone()
-            .unwrap_or_else(|| model.to_string());
+        let task_prompt = format!("{}\n\n## Task\n{}", agent_prompt, orchestrator.task);
+        let agent_model = def.model.clone().unwrap_or_else(|| model.to_string());
 
         if output_format == CliOutputFormat::Text {
             println!("  ⟳ Spawning {} ({})...", def.name, def.role);
@@ -4756,7 +4746,10 @@ fn run_syndicate(
                 } else {
                     let error = format!(
                         "agent tool returned no manifestFile: {}",
-                        result.get("error").and_then(|v| v.as_str()).unwrap_or("unknown")
+                        result
+                            .get("error")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("unknown")
                     );
                     orchestrator.mark_failed(i, error.clone());
                     if output_format == CliOutputFormat::Text {
@@ -4797,10 +4790,7 @@ fn run_syndicate(
                             orchestrator.mark_completed(*i);
                             done.insert(*i);
                             if output_format == CliOutputFormat::Text {
-                                println!(
-                                    "  ✓ {} completed",
-                                    orchestrator.agents[*i].name
-                                );
+                                println!("  ✓ {} completed", orchestrator.agents[*i].name);
                             }
                         }
                         "failed" => {
@@ -4812,10 +4802,7 @@ fn run_syndicate(
                             orchestrator.mark_failed(*i, error.clone());
                             done.insert(*i);
                             if output_format == CliOutputFormat::Text {
-                                eprintln!(
-                                    "  ✗ {} failed: {}",
-                                    orchestrator.agents[*i].name, error
-                                );
+                                eprintln!("  ✗ {} failed: {}", orchestrator.agents[*i].name, error);
                             }
                         }
                         _ => {} // still running
@@ -4830,10 +4817,7 @@ fn run_syndicate(
         if !done.contains(i) {
             orchestrator.mark_failed(*i, "timed out after 30 minutes".into());
             if output_format == CliOutputFormat::Text {
-                eprintln!(
-                    "  ✗ {} timed out",
-                    orchestrator.agents[*i].name
-                );
+                eprintln!("  ✗ {} timed out", orchestrator.agents[*i].name);
             }
         }
     }
@@ -5302,6 +5286,10 @@ fn build_runtime_plugin_state_with_loader(
         .feature_config()
         .clone()
         .with_hooks(runtime_config.hooks().merged(&plugin_hook_config));
+
+    // Start the background workspace indexer (once per process).
+    ensure_indexer_started(cwd, &feature_config);
+
     let (mcp_state, runtime_tools) = build_runtime_mcp_state(runtime_config)?;
     let tool_registry = GlobalToolRegistry::with_plugin_tools(plugin_registry.aggregated_tools()?)?
         .with_runtime_tools(runtime_tools)?;
@@ -5311,6 +5299,26 @@ fn build_runtime_plugin_state_with_loader(
         plugin_registry,
         mcp_state,
     })
+}
+
+/// Process-global index handle, populated once by `ensure_indexer_started`.
+static INDEX_HANDLE: OnceLock<runtime::IndexHandle> = OnceLock::new();
+
+/// Start the background indexer exactly once per process. Subsequent calls are
+/// no-ops thanks to the `OnceLock` guard.
+fn ensure_indexer_started(workspace_root: &Path, feature_config: &runtime::RuntimeFeatureConfig) {
+    static INDEXER_STARTED: OnceLock<()> = OnceLock::new();
+    INDEXER_STARTED.get_or_init(|| {
+        let indexing_config = feature_config.indexing();
+        if indexing_config.enabled {
+            let handle = runtime::start_background_indexer(
+                workspace_root.to_path_buf(),
+                indexing_config.clone(),
+            );
+            tools::init_index_handle(handle.clone());
+            let _ = INDEX_HANDLE.set(handle);
+        }
+    });
 }
 
 fn build_plugin_manager(
@@ -5757,6 +5765,9 @@ fn build_runtime_with_plugin_state(
         system_prompt,
         &feature_config,
     );
+    if let Some(handle) = INDEX_HANDLE.get() {
+        runtime = runtime.with_index_handle(handle.clone());
+    }
     if emit_output {
         runtime = runtime.with_hook_progress_reporter(Box::new(CliHookProgressReporter));
     }
@@ -7015,7 +7026,10 @@ fn print_help_to(out: &mut impl Write) -> io::Result<()> {
     writeln!(out, "  eidolon agents")?;
     writeln!(out, "  eidolon mcp")?;
     writeln!(out, "  eidolon skills")?;
-    writeln!(out, "  eidolon system-prompt [--cwd PATH] [--date YYYY-MM-DD]")?;
+    writeln!(
+        out,
+        "  eidolon system-prompt [--cwd PATH] [--date YYYY-MM-DD]"
+    )?;
     writeln!(out, "  eidolon login")?;
     writeln!(out, "  eidolon logout")?;
     writeln!(out, "  eidolon init")?;
