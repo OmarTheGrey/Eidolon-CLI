@@ -164,7 +164,8 @@ pub(crate) fn render_init_claude_md(cwd: &Path) -> String {
     let mut lines = vec![
         "# CLAUDE.md".to_string(),
         String::new(),
-        "This file provides guidance to Eidolon when working with code in this repository.".to_string(),
+        "This file provides guidance to Eidolon when working with code in this repository."
+            .to_string(),
         String::new(),
     ];
 
@@ -387,7 +388,8 @@ mod tests {
         let root = temp_dir();
         fs::create_dir_all(&root).expect("create root");
         fs::write(root.join("CLAUDE.md"), "custom guidance\n").expect("write existing claude md");
-        fs::write(root.join(".gitignore"), ".eidolon/settings.local.json\n").expect("write gitignore");
+        fs::write(root.join(".gitignore"), ".eidolon/settings.local.json\n")
+            .expect("write gitignore");
 
         let first = initialize_repo(&root).expect("first init should succeed");
         assert!(first

@@ -578,7 +578,10 @@ where
         for result in &results {
             let header = format!(
                 "// {} (lines {}-{}, score {:.2})\n",
-                result.meta.file_path.display(), result.meta.start_line, result.meta.end_line, result.score,
+                result.meta.file_path.display(),
+                result.meta.start_line,
+                result.meta.end_line,
+                result.score,
             );
             let entry_len = header.len() + result.meta.content.len() + 1;
             if entry_len > budget {
