@@ -582,6 +582,7 @@ fn bare_slash_command_guidance(command_name: &str) -> Option<String> {
             | "login"
             | "logout"
             | "init"
+            | "syndicate"
             | "prompt"
     ) {
         return None;
@@ -7723,6 +7724,64 @@ mod tests {
         assert_eq!(
             parse_args(&["sandbox".to_string()]).expect("sandbox should parse"),
             CliAction::Sandbox {
+                output_format: CliOutputFormat::Text,
+            }
+        );
+    }
+
+    #[test]
+    fn bare_syndicate_uses_local_subcommand_parser() {
+        let error = parse_args(&["syndicate".to_string()])
+            .expect_err("bare syndicate should require a collection");
+        assert!(
+            error.contains("syndicate requires a collection name"),
+            "unexpected error: {error}"
+        );
+    }
+
+    #[test]
+    fn syndicate_list_mode_checks_first_positional_or_flag() {
+        assert_eq!(
+            parse_args(&["syndicate".to_string(), "list".to_string()])
+                .expect("syndicate list positional should parse"),
+            CliAction::Syndicate {
+                collection: None,
+                task: None,
+                list: true,
+                model: DEFAULT_MODEL.to_string(),
+                output_format: CliOutputFormat::Text,
+            }
+        );
+
+        assert_eq!(
+            parse_args(&[
+                "syndicate".to_string(),
+                "feature-build".to_string(),
+                "--list".to_string(),
+            ])
+            .expect("syndicate --list flag should parse"),
+            CliAction::Syndicate {
+                collection: None,
+                task: None,
+                list: true,
+                model: DEFAULT_MODEL.to_string(),
+                output_format: CliOutputFormat::Text,
+            }
+        );
+
+        assert_eq!(
+            parse_args(&[
+                "syndicate".to_string(),
+                "feature-build".to_string(),
+                "task".to_string(),
+                "list".to_string(),
+            ])
+            .expect("embedded list token should not trigger list mode"),
+            CliAction::Syndicate {
+                collection: Some("feature-build".to_string()),
+                task: Some("task list".to_string()),
+                list: false,
+                model: DEFAULT_MODEL.to_string(),
                 output_format: CliOutputFormat::Text,
             }
         );
