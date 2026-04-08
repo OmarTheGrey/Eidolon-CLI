@@ -171,14 +171,35 @@ The auto-context injection means the model often already has relevant code in it
 
 ## Skills
 
-Skills are reusable prompt templates — one of Eidolon's key extensibility surfaces. They allow domain-specific knowledge to be packaged as `SKILL.md` files and discovered automatically:
+Skills are reusable prompt templates — one of Eidolon's key extensibility surfaces. They allow domain-specific knowledge to be packaged as `SKILL.md` files and discovered automatically.
 
-```
-.eidolon/skills/<name>/SKILL.md
-.agents/skills/<name>/SKILL.md
-.claude/skills/<name>/SKILL.md
-~/.eidolon/skills/<name>/SKILL.md
-```
+### Discovery Paths
+
+Skills are loaded from the following directories (project-level and user-level):
+
+**Project-level** (relative to workspace root):
+
+| Path | Notes |
+|------|-------|
+| `.eidolon/skills/` | Primary project skills |
+| `.agents/skills/` | Agents-compatible |
+| `.claude/skills/` | Claude-compatible |
+| `.omc/skills/` | OMC-compatible |
+| `.codex/skills/` | Codex-compatible |
+
+**User-level** (home directory):
+
+| Path | Notes |
+|------|-------|
+| `~/.eidolon/skills/` | Primary user skills |
+| `~/.omc/skills/` | OMC-compatible |
+| `~/.codex/skills/` | Codex-compatible |
+| `~/.claude/skills/` | Claude-compatible |
+| `~/.claude/skills/omc-learned/` | Auto-learned OMC skills |
+
+Legacy `/commands` directories (e.g. `~/.eidolon/commands/`) are also loaded for backwards compatibility.
+
+The `EIDOLON_CONFIG_HOME`, `CLAUDE_CONFIG_DIR`, and `CODEX_HOME` environment variables override the respective home-level discovery roots.
 
 The model invokes skills with the `Skill` tool. Browse available skills with `/skills`.
 
