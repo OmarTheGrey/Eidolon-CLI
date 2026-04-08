@@ -9,6 +9,7 @@ use crate::compact::{
 };
 use crate::config::RuntimeFeatureConfig;
 use crate::hooks::{HookAbortSignal, HookProgressReporter, HookRunResult, HookRunner};
+use crate::indexer::IndexHandle;
 use crate::permissions::{
     PermissionContext, PermissionOutcome, PermissionPolicy, PermissionPrompter,
 };
@@ -122,6 +123,8 @@ pub struct AutoCompactionEvent {
     pub removed_message_count: usize,
 }
 
+const AUTO_CONTEXT_MAX_CHARS: usize = 8000;
+
 /// Coordinates the model loop, tool execution, hooks, and session updates.
 pub struct ConversationRuntime<C, T> {
     session: Session,
@@ -136,6 +139,7 @@ pub struct ConversationRuntime<C, T> {
     hook_abort_signal: HookAbortSignal,
     hook_progress_reporter: Option<Box<dyn HookProgressReporter>>,
     session_tracer: Option<SessionTracer>,
+    index_handle: Option<IndexHandle>,
 }
 
 impl<C, T> ConversationRuntime<C, T>
@@ -185,6 +189,7 @@ where
             hook_abort_signal: HookAbortSignal::default(),
             hook_progress_reporter: None,
             session_tracer: None,
+            index_handle: None,
         }
     }
 
@@ -218,6 +223,12 @@ where
     #[must_use]
     pub fn with_session_tracer(mut self, session_tracer: SessionTracer) -> Self {
         self.session_tracer = Some(session_tracer);
+        self
+    }
+
+    #[must_use]
+    pub fn with_index_handle(mut self, handle: IndexHandle) -> Self {
+        self.index_handle = Some(handle);
         self
     }
 
@@ -300,6 +311,10 @@ where
     ) -> Result<TurnSummary, RuntimeError> {
         let user_input = user_input.into();
         self.record_turn_started(&user_input);
+
+        // Build auto-context from the workspace index on the first iteration.
+        let auto_context = self.build_auto_context(&user_input);
+
         self.session
             .push_user_text(user_input)
             .map_err(|error| RuntimeError::new(error.to_string()))?;
@@ -319,8 +334,13 @@ where
                 return Err(error);
             }
 
+            let mut effective_system_prompt = self.system_prompt.clone();
+            if let Some(ref ctx) = auto_context {
+                effective_system_prompt.push(ctx.clone());
+            }
+
             let request = ApiRequest {
-                system_prompt: self.system_prompt.clone(),
+                system_prompt: effective_system_prompt,
                 messages: self.session.messages.clone(),
             };
             let events = match self.api_client.stream(request) {
@@ -537,6 +557,40 @@ where
         Some(AutoCompactionEvent {
             removed_message_count: result.removed_message_count,
         })
+    }
+
+    /// Query the workspace index for snippets related to `user_input` and
+    /// format them as an additional system-prompt section. Returns `None` when
+    /// the index is disabled, not ready, or produces no results.
+    fn build_auto_context(&self, user_input: &str) -> Option<String> {
+        let handle = self.index_handle.as_ref()?;
+        let config = handle.config();
+        if !config.auto_context_enabled {
+            return None;
+        }
+        let results = handle.query(user_input, config.auto_context_top_k)?;
+        if results.is_empty() {
+            return None;
+        }
+
+        let mut buf = String::from("<codebase_context>\n");
+        let mut budget = AUTO_CONTEXT_MAX_CHARS;
+        for result in &results {
+            let header = format!(
+                "// {} (lines {}-{}, score {:.2})\n",
+                result.meta.file_path.display(), result.meta.start_line, result.meta.end_line, result.score,
+            );
+            let entry_len = header.len() + result.meta.content.len() + 1;
+            if entry_len > budget {
+                break;
+            }
+            buf.push_str(&header);
+            buf.push_str(&result.meta.content);
+            buf.push('\n');
+            budget -= entry_len;
+        }
+        buf.push_str("</codebase_context>");
+        Some(buf)
     }
 
     fn record_turn_started(&self, user_input: &str) {

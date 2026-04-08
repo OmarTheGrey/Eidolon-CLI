@@ -19,7 +19,7 @@ use std::ops::{Deref, DerefMut};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError, Sender};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, OnceLock};
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant, UNIX_EPOCH};
 
@@ -5302,6 +5302,10 @@ fn build_runtime_plugin_state_with_loader(
         .feature_config()
         .clone()
         .with_hooks(runtime_config.hooks().merged(&plugin_hook_config));
+
+    // Start the background workspace indexer (once per process).
+    ensure_indexer_started(cwd, &feature_config);
+
     let (mcp_state, runtime_tools) = build_runtime_mcp_state(runtime_config)?;
     let tool_registry = GlobalToolRegistry::with_plugin_tools(plugin_registry.aggregated_tools()?)?
         .with_runtime_tools(runtime_tools)?;
@@ -5311,6 +5315,24 @@ fn build_runtime_plugin_state_with_loader(
         plugin_registry,
         mcp_state,
     })
+}
+
+/// Process-global index handle, populated once by `ensure_indexer_started`.
+static INDEX_HANDLE: OnceLock<runtime::IndexHandle> = OnceLock::new();
+
+/// Start the background indexer exactly once per process. Subsequent calls are
+/// no-ops thanks to the `OnceLock` guard.
+fn ensure_indexer_started(workspace_root: &Path, feature_config: &runtime::RuntimeFeatureConfig) {
+    static INDEXER_STARTED: OnceLock<()> = OnceLock::new();
+    INDEXER_STARTED.get_or_init(|| {
+        let indexing_config = feature_config.indexing();
+        if indexing_config.enabled {
+            let handle =
+                runtime::start_background_indexer(workspace_root.to_path_buf(), indexing_config.clone());
+            tools::init_index_handle(handle.clone());
+            let _ = INDEX_HANDLE.set(handle);
+        }
+    });
 }
 
 fn build_plugin_manager(
@@ -5757,6 +5779,9 @@ fn build_runtime_with_plugin_state(
         system_prompt,
         &feature_config,
     );
+    if let Some(handle) = INDEX_HANDLE.get() {
+        runtime = runtime.with_index_handle(handle.clone());
+    }
     if emit_output {
         runtime = runtime.with_hook_progress_reporter(Box::new(CliHookProgressReporter));
     }
