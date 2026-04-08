@@ -599,7 +599,8 @@ pub fn mvp_tool_specs() -> Vec<ToolSpec> {
                     "prompt": { "type": "string" },
                     "subagent_type": { "type": "string" },
                     "name": { "type": "string" },
-                    "model": { "type": "string" }
+                    "model": { "type": "string" },
+                    "session_id": { "type": "string" }
                 },
                 "required": ["description", "prompt"],
                 "additionalProperties": false
@@ -2263,6 +2264,7 @@ struct AgentInput {
     subagent_type: Option<String>,
     name: Option<String>,
     model: Option<String>,
+    session_id: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -2589,6 +2591,7 @@ struct AgentJob {
     prompt: String,
     system_prompt: Vec<String>,
     allowed_tools: BTreeSet<String>,
+    session_id: String,
 }
 
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
@@ -3191,10 +3194,39 @@ fn resolve_skill_path(skill: &str) -> Result<std::path::PathBuf, String> {
 const DEFAULT_AGENT_MODEL: &str = "claude-opus-4-6";
 const DEFAULT_AGENT_SYSTEM_DATE: &str = "2026-03-31";
 const DEFAULT_AGENT_MAX_ITERATIONS: usize = 32;
-const MAX_AGENT_SPAWNS: usize = 32;
+const MAX_AGENT_SPAWNS_PER_SESSION: usize = 32;
 
-static AGENT_SPAWN_COUNT: std::sync::atomic::AtomicUsize =
-    std::sync::atomic::AtomicUsize::new(0);
+fn resolve_agent_session_id(input: &AgentInput) -> String {
+    if let Some(value) = input
+        .session_id
+        .as_ref()
+        .map(|v| v.trim())
+        .filter(|v| !v.is_empty())
+    {
+        return value.to_string();
+    }
+
+    if let Ok(value) = std::env::var("EIDOLON_AGENT_SESSION") {
+        let trimmed = value.trim();
+        if !trimmed.is_empty() {
+            return trimmed.to_string();
+        }
+    }
+
+    String::from("default")
+}
+
+fn session_spawn_counter(session_id: &str) -> std::sync::Arc<std::sync::atomic::AtomicUsize> {
+    use std::sync::{atomic::AtomicUsize, Arc, Mutex, OnceLock};
+
+    static COUNTERS: OnceLock<Mutex<BTreeMap<String, Arc<AtomicUsize>>>> = OnceLock::new();
+    let counters = COUNTERS.get_or_init(|| Mutex::new(BTreeMap::new()));
+    let mut guard = counters.lock().expect("session spawn counters lock poisoned");
+    guard
+        .entry(session_id.to_string())
+        .or_insert_with(|| Arc::new(AtomicUsize::new(0)))
+        .clone()
+}
 
 fn execute_agent(input: AgentInput) -> Result<AgentOutput, String> {
     execute_agent_with_spawn(input, spawn_agent_job)
@@ -3204,15 +3236,6 @@ fn execute_agent_with_spawn<F>(input: AgentInput, spawn_fn: F) -> Result<AgentOu
 where
     F: FnOnce(AgentJob) -> Result<(), String>,
 {
-    // Guard: cap total concurrent/cumulative agent spawns within this process.
-    let prev = AGENT_SPAWN_COUNT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-    if prev >= MAX_AGENT_SPAWNS {
-        AGENT_SPAWN_COUNT.fetch_sub(1, std::sync::atomic::Ordering::Relaxed);
-        return Err(format!(
-            "agent spawn limit ({MAX_AGENT_SPAWNS}) reached — refusing to create more sub-agents"
-        ));
-    }
-
     if input.description.trim().is_empty() {
         return Err(String::from("description must not be empty"));
     }
@@ -3226,6 +3249,7 @@ where
     let output_file = output_dir.join(format!("{agent_id}.md"));
     let manifest_file = output_dir.join(format!("{agent_id}.json"));
     let normalized_subagent_type = normalize_subagent_type(input.subagent_type.as_deref());
+    let session_id = resolve_agent_session_id(&input);
     let model = resolve_agent_model(input.model.as_deref());
     let agent_name = input
         .name
@@ -3279,6 +3303,7 @@ where
         prompt: input.prompt,
         system_prompt,
         allowed_tools,
+        session_id,
     };
     if let Err(error) = spawn_fn(job) {
         let error = format!("failed to spawn sub-agent: {error}");
@@ -3290,7 +3315,28 @@ where
 }
 
 fn spawn_agent_job(job: AgentJob) -> Result<(), String> {
+    if job.manifest.subagent_type.as_deref() == Some("Syndicate") {
+        if let Some(current_name) = std::thread::current().name() {
+            if current_name.starts_with("eidolon-agent-") {
+                return Err(String::from(
+                    "refusing Syndicate->Syndicate recursive spawn from sub-agent thread",
+                ));
+            }
+        }
+    }
+
+    let counter = session_spawn_counter(&job.session_id);
+    let prev = counter.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    if prev >= MAX_AGENT_SPAWNS_PER_SESSION {
+        counter.fetch_sub(1, std::sync::atomic::Ordering::Relaxed);
+        return Err(format!(
+            "agent spawn limit ({MAX_AGENT_SPAWNS_PER_SESSION}) reached for session '{}'",
+            job.session_id
+        ));
+    }
+
     let thread_name = format!("eidolon-agent-{}", job.manifest.agent_id);
+    let counter_for_thread = std::sync::Arc::clone(&counter);
     std::thread::Builder::new()
         .name(thread_name)
         .spawn(move || {
@@ -3311,6 +3357,7 @@ fn spawn_agent_job(job: AgentJob) -> Result<(), String> {
                     );
                 }
             }
+            counter_for_thread.fetch_sub(1, std::sync::atomic::Ordering::Relaxed);
         })
         .map(|_| ())
         .map_err(|error| error.to_string())
@@ -3441,7 +3488,6 @@ fn allowed_tools_for_subagent(subagent_type: &str) -> BTreeSet<String> {
             "TodoWrite",
             "Skill",
             "ToolSearch",
-            "Agent",
             "Sleep",
             "SendUserMessage",
             "StructuredOutput",
@@ -6397,6 +6443,7 @@ mod tests {
                 subagent_type: Some("Explore".to_string()),
                 name: Some("ship-audit".to_string()),
                 model: None,
+                session_id: None,
             },
             move |job| {
                 *captured_for_spawn
@@ -6478,6 +6525,7 @@ mod tests {
                 subagent_type: Some("Explore".to_string()),
                 name: Some("complete-task".to_string()),
                 model: Some("claude-sonnet-4-6".to_string()),
+                session_id: None,
             },
             |job| {
                 persist_agent_terminal_state(
@@ -6527,6 +6575,7 @@ mod tests {
                 subagent_type: Some("Verification".to_string()),
                 name: Some("fail-task".to_string()),
                 model: None,
+                session_id: None,
             },
             |job| {
                 persist_agent_terminal_state(
@@ -6574,6 +6623,7 @@ mod tests {
                 subagent_type: None,
                 name: Some("spawn-error".to_string()),
                 model: None,
+                session_id: None,
             },
             |_| Err(String::from("thread creation failed")),
         )
@@ -6728,6 +6778,10 @@ mod tests {
         assert!(general.contains("bash"));
         assert!(general.contains("write_file"));
         assert!(!general.contains("Agent"));
+
+        let syndicate = allowed_tools_for_subagent("Syndicate");
+        assert!(!syndicate.contains("Agent"));
+        assert!(syndicate.contains("SyndicateMemoryWrite"));
 
         let explore = allowed_tools_for_subagent("Explore");
         assert!(explore.contains("read_file"));

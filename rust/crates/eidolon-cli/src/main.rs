@@ -4733,6 +4733,7 @@ fn run_syndicate(
             "subagent_type": "Syndicate",
             "name": format!("syndicate-{}", def.name),
             "model": agent_model,
+            "session_id": orchestrator.session_id,
         });
 
         let result_json = match tools::execute_tool("Agent", &agent_input) {
