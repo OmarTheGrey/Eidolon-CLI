@@ -18,8 +18,8 @@ use runtime::{
     permission_enforcer::{EnforcementResult, PermissionEnforcer},
     read_file,
     summary_compression::compress_summary_text,
-    task_registry::TaskRegistry,
     syndicate_memory::SyndicateMemory,
+    task_registry::TaskRegistry,
     team_cron_registry::{CronRegistry, TeamRegistry},
     worker_boot::{WorkerReadySnapshot, WorkerRegistry},
     write_file, ApiClient, ApiRequest, AssistantEvent, BashCommandInput, BashCommandOutput,
@@ -69,8 +69,8 @@ fn global_worker_registry() -> &'static WorkerRegistry {
 }
 
 mod syndicate_mem_global {
-    use std::sync::OnceLock;
     use runtime::syndicate_memory::SyndicateMemory;
+    use std::sync::OnceLock;
     pub(super) static MEMORY: OnceLock<SyndicateMemory> = OnceLock::new();
 }
 
@@ -78,6 +78,21 @@ fn global_syndicate_memory() -> Result<&'static SyndicateMemory, String> {
     syndicate_mem_global::MEMORY.get().ok_or_else(|| {
         String::from("syndicate memory not initialized; call init_syndicate_memory first")
     })
+}
+
+mod index_handle_global {
+    use std::sync::OnceLock;
+    pub(super) static HANDLE: OnceLock<runtime::IndexHandle> = OnceLock::new();
+}
+
+/// Initialise the global index handle so the `semantic_search` tool can query
+/// the workspace index.  Should be called once from CLI startup.
+pub fn init_index_handle(handle: runtime::IndexHandle) {
+    let _ = index_handle_global::HANDLE.set(handle);
+}
+
+fn global_index_handle() -> Option<&'static runtime::IndexHandle> {
+    index_handle_global::HANDLE.get()
 }
 
 /// Initialise the global syndicate memory with a file-backed instance.
@@ -507,6 +522,20 @@ pub fn mvp_tool_specs() -> Vec<ToolSpec> {
                     "multiline": { "type": "boolean" }
                 },
                 "required": ["pattern"],
+                "additionalProperties": false
+            }),
+            required_permission: PermissionMode::ReadOnly,
+        },
+        ToolSpec {
+            name: "semantic_search",
+            description: "Search the codebase using natural language. Returns code snippets semantically similar to the query. Use when grep_search isn't finding what you need or when searching by concept rather than exact text.",
+            input_schema: json!({
+                "type": "object",
+                "properties": {
+                    "query": { "type": "string", "description": "Natural language description of the code or concept to search for." },
+                    "top_k": { "type": "integer", "minimum": 1, "maximum": 50, "description": "Maximum number of results to return. Defaults to 10." }
+                },
+                "required": ["query"],
                 "additionalProperties": false
             }),
             required_permission: PermissionMode::ReadOnly,
@@ -1239,6 +1268,7 @@ pub fn execute_tool(name: &str, input: &Value) -> Result<String, String> {
     execute_tool_with_enforcer(None, name, input)
 }
 
+#[allow(clippy::too_many_lines)]
 fn execute_tool_with_enforcer(
     enforcer: Option<&PermissionEnforcer>,
     name: &str,
@@ -1271,6 +1301,7 @@ fn execute_tool_with_enforcer(
         }
         "WebFetch" => from_value::<WebFetchInput>(input).and_then(run_web_fetch),
         "WebSearch" => from_value::<WebSearchInput>(input).and_then(run_web_search),
+        "semantic_search" => from_value::<SemanticSearchInput>(input).and_then(run_semantic_search),
         "TodoWrite" => from_value::<TodoWriteInput>(input).and_then(run_todo_write),
         "Skill" => from_value::<SkillInput>(input).and_then(run_skill),
         "Agent" => from_value::<AgentInput>(input).and_then(run_agent),
@@ -2127,6 +2158,54 @@ fn run_web_fetch(input: WebFetchInput) -> Result<String, String> {
 #[allow(clippy::needless_pass_by_value)]
 fn run_web_search(input: WebSearchInput) -> Result<String, String> {
     to_pretty_json(execute_web_search(&input)?)
+}
+
+#[derive(Debug, Deserialize)]
+struct SemanticSearchInput {
+    query: String,
+    top_k: Option<usize>,
+}
+
+#[allow(clippy::needless_pass_by_value)]
+fn run_semantic_search(input: SemanticSearchInput) -> Result<String, String> {
+    let handle = global_index_handle()
+        .ok_or_else(|| "semantic indexing is disabled or not configured".to_string())?;
+
+    if !handle.is_ready() {
+        return Err(
+            "codebase index is still building. Try again shortly, or use grep_search.".into(),
+        );
+    }
+
+    let top_k = input.top_k.unwrap_or(10);
+    let results = handle
+        .query(&input.query, top_k)
+        .ok_or_else(|| "index or embedder not available".to_string())?;
+
+    if results.is_empty() {
+        return Ok(json!({
+            "results": [],
+            "message": "No semantically similar code found."
+        })
+        .to_string());
+    }
+
+    let items: Vec<serde_json::Value> = results
+        .iter()
+        .map(|r| {
+            json!({
+                "file": r.meta.file_path.display().to_string(),
+                "lines": format!("{}-{}", r.meta.start_line, r.meta.end_line),
+                "score": format!("{:.3}", r.score),
+                "content": r.meta.content
+            })
+        })
+        .collect();
+
+    to_pretty_json(json!({
+        "results": items,
+        "count": items.len()
+    }))
 }
 
 fn run_todo_write(input: TodoWriteInput) -> Result<String, String> {
@@ -3221,7 +3300,9 @@ fn session_spawn_counter(session_id: &str) -> std::sync::Arc<std::sync::atomic::
 
     static COUNTERS: OnceLock<Mutex<BTreeMap<String, Arc<AtomicUsize>>>> = OnceLock::new();
     let counters = COUNTERS.get_or_init(|| Mutex::new(BTreeMap::new()));
-    let mut guard = counters.lock().expect("session spawn counters lock poisoned");
+    let mut guard = counters
+        .lock()
+        .expect("session spawn counters lock poisoned");
     guard
         .entry(session_id.to_string())
         .or_insert_with(|| Arc::new(AtomicUsize::new(0)))
@@ -6044,8 +6125,9 @@ mod tests {
 
         let output: serde_json::Value = serde_json::from_str(&result).expect("valid json");
         assert_eq!(output["skill"], "help");
-        assert!(normalize_path_sep(output["path"].as_str().expect("path"))
-            .ends_with("/help/SKILL.md"));
+        assert!(
+            normalize_path_sep(output["path"].as_str().expect("path")).ends_with("/help/SKILL.md")
+        );
         assert!(output["prompt"]
             .as_str()
             .expect("prompt")
@@ -6061,8 +6143,10 @@ mod tests {
         let dollar_output: serde_json::Value =
             serde_json::from_str(&dollar_result).expect("valid json");
         assert_eq!(dollar_output["skill"], "$help");
-        assert!(normalize_path_sep(dollar_output["path"].as_str().expect("path"))
-            .ends_with("/help/SKILL.md"));
+        assert!(
+            normalize_path_sep(dollar_output["path"].as_str().expect("path"))
+                .ends_with("/help/SKILL.md")
+        );
 
         if let Some(home) = original_home {
             std::env::set_var("HOME", home);
@@ -6098,15 +6182,19 @@ mod tests {
             .expect("project-local skill should resolve");
         let skill_output: serde_json::Value =
             serde_json::from_str(&skill_result).expect("valid json");
-        assert!(normalize_path_sep(skill_output["path"].as_str().expect("path"))
-            .ends_with(".eidolon/skills/plan/SKILL.md"));
+        assert!(
+            normalize_path_sep(skill_output["path"].as_str().expect("path"))
+                .ends_with(".eidolon/skills/plan/SKILL.md")
+        );
 
         let command_result = execute_tool("Skill", &json!({ "skill": "/handoff" }))
             .expect("legacy command should resolve");
         let command_output: serde_json::Value =
             serde_json::from_str(&command_result).expect("valid json");
-        assert!(normalize_path_sep(command_output["path"].as_str().expect("path"))
-            .ends_with(".eidolon/commands/handoff.md"));
+        assert!(
+            normalize_path_sep(command_output["path"].as_str().expect("path"))
+                .ends_with(".eidolon/commands/handoff.md")
+        );
 
         std::env::set_current_dir(&original_dir).expect("restore cwd");
         fs::remove_dir_all(root).expect("temp project should clean up");
@@ -6201,11 +6289,15 @@ mod tests {
         let omc_output: serde_json::Value = serde_json::from_str(&omc_result).expect("valid json");
         let agents_output: serde_json::Value =
             serde_json::from_str(&agents_result).expect("valid json");
-        assert!(normalize_path_sep(omc_output["path"].as_str().expect("path"))
-            .ends_with(".omc/skills/hud/SKILL.md"));
+        assert!(
+            normalize_path_sep(omc_output["path"].as_str().expect("path"))
+                .ends_with(".omc/skills/hud/SKILL.md")
+        );
         assert_eq!(omc_output["description"], "Project-local OMC HUD helper");
-        assert!(normalize_path_sep(agents_output["path"].as_str().expect("path"))
-            .ends_with(".agents/skills/trace/SKILL.md"));
+        assert!(
+            normalize_path_sep(agents_output["path"].as_str().expect("path"))
+                .ends_with(".agents/skills/trace/SKILL.md")
+        );
         assert_eq!(
             agents_output["description"],
             "Project-local agents compatibility helper"
@@ -6314,16 +6406,20 @@ mod tests {
             execute_tool("Skill", &json!({ "skill": "statusline" })).expect("direct skill");
         let direct_skill_output: serde_json::Value =
             serde_json::from_str(&direct_skill).expect("valid skill json");
-        assert!(normalize_path_sep(direct_skill_output["path"].as_str().expect("path"))
-            .ends_with("skills/statusline/SKILL.md"));
+        assert!(
+            normalize_path_sep(direct_skill_output["path"].as_str().expect("path"))
+                .ends_with("skills/statusline/SKILL.md")
+        );
         assert_eq!(direct_skill_output["description"], "Claude config skill");
 
         let legacy_command =
             execute_tool("Skill", &json!({ "skill": "doctor-check" })).expect("direct command");
         let legacy_command_output: serde_json::Value =
             serde_json::from_str(&legacy_command).expect("valid command json");
-        assert!(normalize_path_sep(legacy_command_output["path"].as_str().expect("path"))
-            .ends_with("commands/doctor-check.md"));
+        assert!(
+            normalize_path_sep(legacy_command_output["path"].as_str().expect("path"))
+                .ends_with("commands/doctor-check.md")
+        );
         assert_eq!(
             legacy_command_output["description"],
             "Claude config command"
@@ -7277,8 +7373,10 @@ mod tests {
             .expect("glob should succeed");
         let globbed_output: serde_json::Value = serde_json::from_str(&globbed).expect("json");
         assert_eq!(globbed_output["numFiles"], 1);
-        assert!(normalize_path_sep(globbed_output["filenames"][0].as_str().expect("filename"))
-            .ends_with("nested/lib.rs"));
+        assert!(
+            normalize_path_sep(globbed_output["filenames"][0].as_str().expect("filename"))
+                .ends_with("nested/lib.rs")
+        );
 
         let glob_error = execute_tool("glob_search", &json!({ "pattern": "[" }))
             .expect_err("invalid glob should fail");
@@ -7486,12 +7584,16 @@ mod tests {
         assert_eq!(enter_output["previousLocalMode"], "acceptEdits");
         assert_eq!(enter_output["currentLocalMode"], "plan");
 
-        let local_settings = std::fs::read_to_string(cwd.join(".eidolon").join("settings.local.json"))
-            .expect("local settings after enter");
+        let local_settings =
+            std::fs::read_to_string(cwd.join(".eidolon").join("settings.local.json"))
+                .expect("local settings after enter");
         assert!(local_settings.contains(r#""defaultMode": "plan""#));
-        let state =
-            std::fs::read_to_string(cwd.join(".eidolon").join("tool-state").join("plan-mode.json"))
-                .expect("plan mode state");
+        let state = std::fs::read_to_string(
+            cwd.join(".eidolon")
+                .join("tool-state")
+                .join("plan-mode.json"),
+        )
+        .expect("plan mode state");
         assert!(state.contains(r#""hadLocalOverride": true"#));
         assert!(state.contains(r#""previousLocalMode": "acceptEdits""#));
 
@@ -7502,8 +7604,9 @@ mod tests {
         assert_eq!(exit_output["previousLocalMode"], "acceptEdits");
         assert_eq!(exit_output["currentLocalMode"], "acceptEdits");
 
-        let local_settings = std::fs::read_to_string(cwd.join(".eidolon").join("settings.local.json"))
-            .expect("local settings after exit");
+        let local_settings =
+            std::fs::read_to_string(cwd.join(".eidolon").join("settings.local.json"))
+                .expect("local settings after exit");
         assert!(local_settings.contains(r#""defaultMode": "acceptEdits""#));
         assert!(!cwd
             .join(".eidolon")
@@ -7557,8 +7660,9 @@ mod tests {
         assert_eq!(exit_output["changed"], true);
         assert_eq!(exit_output["currentLocalMode"], serde_json::Value::Null);
 
-        let local_settings = std::fs::read_to_string(cwd.join(".eidolon").join("settings.local.json"))
-            .expect("local settings after exit");
+        let local_settings =
+            std::fs::read_to_string(cwd.join(".eidolon").join("settings.local.json"))
+                .expect("local settings after exit");
         let local_settings_json: serde_json::Value =
             serde_json::from_str(&local_settings).expect("valid settings json");
         assert_eq!(
