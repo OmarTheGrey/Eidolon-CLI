@@ -7,7 +7,9 @@
 <p align="center">
   <strong>A fully extensible AI coding agent harness — built to be embedded, extended, and composed.</strong>
 </p>
-
+<p align="center">
+[![Ask DeepWiki](https://deepwiki.com/badge.svg)](https://deepwiki.com/OmarTheGrey/Eidolon-CLI)
+</p>
 ---
 
 Eidolon is a Claude Code–inspired agentic coding system built from the ground up in Rust. It provides an interactive terminal interface for LLM-driven coding workflows, with a modular architecture designed around extensible **tools**, **skills**, **plugins**, and **sub-agents**.
