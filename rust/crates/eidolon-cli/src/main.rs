@@ -4735,19 +4735,39 @@ fn run_syndicate(
             "model": agent_model,
         });
 
-        let result_json = tools::execute_tool("Agent", &agent_input)
-            .map_err(|e| format!("failed to spawn agent '{}': {e}", def.name))?;
-        let result: Value = serde_json::from_str(&result_json)?;
-        if let Some(mf) = result.get("manifestFile").and_then(|v| v.as_str()) {
-            manifest_files.push((i, PathBuf::from(mf)));
-        } else {
-            let error = format!(
-                "agent tool returned no manifestFile: {}",
-                result.get("error").and_then(|v| v.as_str()).unwrap_or("unknown")
-            );
-            orchestrator.mark_failed(i, error.clone());
-            if output_format == CliOutputFormat::Text {
-                eprintln!("  ✗ {} spawn failed: {}", def.name, error);
+        let result_json = match tools::execute_tool("Agent", &agent_input) {
+            Ok(value) => value,
+            Err(e) => {
+                let error = format!("failed to spawn agent '{}': {e}", def.name);
+                orchestrator.mark_failed(i, error.clone());
+                if output_format == CliOutputFormat::Text {
+                    eprintln!("  ✗ {} spawn failed: {}", def.name, error);
+                }
+                continue;
+            }
+        };
+
+        match serde_json::from_str::<Value>(&result_json) {
+            Ok(result) => {
+                if let Some(mf) = result.get("manifestFile").and_then(|v| v.as_str()) {
+                    manifest_files.push((i, PathBuf::from(mf)));
+                } else {
+                    let error = format!(
+                        "agent tool returned no manifestFile: {}",
+                        result.get("error").and_then(|v| v.as_str()).unwrap_or("unknown")
+                    );
+                    orchestrator.mark_failed(i, error.clone());
+                    if output_format == CliOutputFormat::Text {
+                        eprintln!("  ✗ {} spawn failed: {}", def.name, error);
+                    }
+                }
+            }
+            Err(e) => {
+                let error = format!("invalid Agent tool JSON for '{}': {e}", def.name);
+                orchestrator.mark_failed(i, error.clone());
+                if output_format == CliOutputFormat::Text {
+                    eprintln!("  ✗ {} spawn failed: {}", def.name, error);
+                }
             }
         }
     }
