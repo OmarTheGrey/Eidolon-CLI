@@ -19,6 +19,7 @@ use runtime::{
     read_file,
     summary_compression::compress_summary_text,
     task_registry::TaskRegistry,
+    syndicate_memory::SyndicateMemory,
     team_cron_registry::{CronRegistry, TeamRegistry},
     worker_boot::{WorkerReadySnapshot, WorkerRegistry},
     write_file, ApiClient, ApiRequest, AssistantEvent, BashCommandInput, BashCommandOutput,
@@ -65,6 +66,27 @@ fn global_worker_registry() -> &'static WorkerRegistry {
     use std::sync::OnceLock;
     static REGISTRY: OnceLock<WorkerRegistry> = OnceLock::new();
     REGISTRY.get_or_init(WorkerRegistry::new)
+}
+
+mod syndicate_mem_global {
+    use std::sync::OnceLock;
+    use runtime::syndicate_memory::SyndicateMemory;
+    pub(super) static MEMORY: OnceLock<SyndicateMemory> = OnceLock::new();
+}
+
+fn global_syndicate_memory() -> Result<&'static SyndicateMemory, String> {
+    syndicate_mem_global::MEMORY.get().ok_or_else(|| {
+        String::from("syndicate memory not initialized; call init_syndicate_memory first")
+    })
+}
+
+/// Initialise the global syndicate memory with a file-backed instance.
+/// Must be called exactly once before agents use memory tools.
+pub fn init_syndicate_memory(path: &std::path::Path) -> Result<(), String> {
+    let backed = SyndicateMemory::with_path(path)?;
+    syndicate_mem_global::MEMORY
+        .set(backed)
+        .map_err(|_| "syndicate memory already initialized".to_string())
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -577,7 +599,8 @@ pub fn mvp_tool_specs() -> Vec<ToolSpec> {
                     "prompt": { "type": "string" },
                     "subagent_type": { "type": "string" },
                     "name": { "type": "string" },
-                    "model": { "type": "string" }
+                    "model": { "type": "string" },
+                    "session_id": { "type": "string" }
                 },
                 "required": ["description", "prompt"],
                 "additionalProperties": false
@@ -1137,6 +1160,63 @@ pub fn mvp_tool_specs() -> Vec<ToolSpec> {
             }),
             required_permission: PermissionMode::DangerFullAccess,
         },
+        // ── Syndicate memory tools ──────────────────────────────────────
+        ToolSpec {
+            name: "SyndicateMemoryWrite",
+            description: "Write a key-value pair to syndicate shared memory. Other agents in the syndicate can read this.",
+            input_schema: json!({
+                "type": "object",
+                "properties": {
+                    "key": { "type": "string", "description": "The memory key (e.g. 'plan', 'status', 'findings')." },
+                    "value": { "type": "string", "description": "The value to store." },
+                    "agent_id": { "type": "string", "description": "Your agent identifier." }
+                },
+                "required": ["key", "value", "agent_id"],
+                "additionalProperties": false
+            }),
+            required_permission: PermissionMode::DangerFullAccess,
+        },
+        ToolSpec {
+            name: "SyndicateMemoryRead",
+            description: "Read from syndicate shared memory. Omit 'key' to read all entries.",
+            input_schema: json!({
+                "type": "object",
+                "properties": {
+                    "key": { "type": "string", "description": "Specific key to read. Omit to read all." }
+                },
+                "additionalProperties": false
+            }),
+            required_permission: PermissionMode::ReadOnly,
+        },
+        ToolSpec {
+            name: "SyndicateMemoryLog",
+            description: "Append a structured observation to the syndicate's shared log.",
+            input_schema: json!({
+                "type": "object",
+                "properties": {
+                    "agent_id": { "type": "string", "description": "Your agent identifier." },
+                    "operation": { "type": "string", "description": "What you did (e.g. 'analyze', 'implement', 'review')." },
+                    "key": { "type": "string", "description": "Related memory key, if any." },
+                    "detail": { "type": "string", "description": "Observation or note." }
+                },
+                "required": ["agent_id", "operation", "detail"],
+                "additionalProperties": false
+            }),
+            required_permission: PermissionMode::DangerFullAccess,
+        },
+        ToolSpec {
+            name: "SyndicateMemorySearch",
+            description: "Search syndicate shared memory entries by keyword (case-insensitive match on key and value).",
+            input_schema: json!({
+                "type": "object",
+                "properties": {
+                    "query": { "type": "string", "description": "Search term." }
+                },
+                "required": ["query"],
+                "additionalProperties": false
+            }),
+            required_permission: PermissionMode::ReadOnly,
+        },
     ]
 }
 
@@ -1243,6 +1323,23 @@ fn execute_tool_with_enforcer(
         "MCP" => from_value::<McpToolInput>(input).and_then(run_mcp_tool),
         "TestingPermission" => {
             from_value::<TestingPermissionInput>(input).and_then(run_testing_permission)
+        }
+        // Syndicate memory tools
+        "SyndicateMemoryWrite" => {
+            maybe_enforce_permission_check(enforcer, name, input)?;
+            from_value::<SyndicateMemoryWriteInput>(input).and_then(run_syndicate_memory_write)
+        }
+        "SyndicateMemoryRead" => {
+            maybe_enforce_permission_check(enforcer, name, input)?;
+            from_value::<SyndicateMemoryReadInput>(input).and_then(run_syndicate_memory_read)
+        }
+        "SyndicateMemoryLog" => {
+            maybe_enforce_permission_check(enforcer, name, input)?;
+            from_value::<SyndicateMemoryLogInput>(input).and_then(run_syndicate_memory_log)
+        }
+        "SyndicateMemorySearch" => {
+            maybe_enforce_permission_check(enforcer, name, input)?;
+            from_value::<SyndicateMemorySearchInput>(input).and_then(run_syndicate_memory_search)
         }
         _ => Err(format!("unsupported tool: {name}")),
     }
@@ -1560,6 +1657,92 @@ fn run_cron_list(_input: Value) -> Result<String, String> {
     to_pretty_json(json!({
         "crons": entries,
         "count": entries.len()
+    }))
+}
+
+// ── Syndicate memory tool implementations ──
+
+#[allow(clippy::needless_pass_by_value)]
+fn run_syndicate_memory_write(input: SyndicateMemoryWriteInput) -> Result<String, String> {
+    let entry = global_syndicate_memory()?.write(&input.key, &input.value, &input.agent_id)?;
+    to_pretty_json(json!({
+        "status": "written",
+        "key": entry.key,
+        "written_by": entry.written_by,
+        "updated_at": entry.updated_at
+    }))
+}
+
+#[allow(clippy::needless_pass_by_value)]
+fn run_syndicate_memory_read(input: SyndicateMemoryReadInput) -> Result<String, String> {
+    let mem = global_syndicate_memory()?;
+    if let Some(key) = &input.key {
+        match mem.read(key) {
+            Some(entry) => to_pretty_json(json!({
+                "key": entry.key,
+                "value": entry.value,
+                "written_by": entry.written_by,
+                "updated_at": entry.updated_at
+            })),
+            None => to_pretty_json(json!({
+                "key": key,
+                "error": "key not found"
+            })),
+        }
+    } else {
+        let entries: Vec<_> = mem
+            .read_all()
+            .into_iter()
+            .map(|e| {
+                json!({
+                    "key": e.key,
+                    "value": e.value,
+                    "written_by": e.written_by,
+                    "updated_at": e.updated_at
+                })
+            })
+            .collect();
+        to_pretty_json(json!({
+            "entries": entries,
+            "count": entries.len()
+        }))
+    }
+}
+
+#[allow(clippy::needless_pass_by_value)]
+fn run_syndicate_memory_log(input: SyndicateMemoryLogInput) -> Result<String, String> {
+    let entry = global_syndicate_memory()?.append_log(
+        &input.agent_id,
+        &input.operation,
+        input.key.as_deref(),
+        &input.detail,
+    )?;
+    to_pretty_json(json!({
+        "status": "logged",
+        "agent_id": entry.agent_id,
+        "operation": entry.operation,
+        "timestamp": entry.timestamp
+    }))
+}
+
+#[allow(clippy::needless_pass_by_value)]
+fn run_syndicate_memory_search(input: SyndicateMemorySearchInput) -> Result<String, String> {
+    let results: Vec<_> = global_syndicate_memory()?
+        .search(&input.query)
+        .into_iter()
+        .map(|e| {
+            json!({
+                "key": e.key,
+                "value": e.value,
+                "written_by": e.written_by,
+                "updated_at": e.updated_at
+            })
+        })
+        .collect();
+    to_pretty_json(json!({
+        "query": input.query,
+        "results": results,
+        "count": results.len()
     }))
 }
 
@@ -2081,6 +2264,7 @@ struct AgentInput {
     subagent_type: Option<String>,
     name: Option<String>,
     model: Option<String>,
+    session_id: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -2253,6 +2437,35 @@ struct CronDeleteInput {
     cron_id: String,
 }
 
+// ── Syndicate memory input types ──
+
+#[derive(Debug, Deserialize)]
+struct SyndicateMemoryWriteInput {
+    key: String,
+    value: String,
+    agent_id: String,
+}
+
+#[derive(Debug, Default, Deserialize)]
+#[serde(default)]
+struct SyndicateMemoryReadInput {
+    key: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct SyndicateMemoryLogInput {
+    agent_id: String,
+    operation: String,
+    #[serde(default)]
+    key: Option<String>,
+    detail: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct SyndicateMemorySearchInput {
+    query: String,
+}
+
 #[derive(Debug, Deserialize)]
 struct LspInput {
     action: String,
@@ -2378,6 +2591,7 @@ struct AgentJob {
     prompt: String,
     system_prompt: Vec<String>,
     allowed_tools: BTreeSet<String>,
+    session_id: String,
 }
 
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
@@ -2980,6 +3194,39 @@ fn resolve_skill_path(skill: &str) -> Result<std::path::PathBuf, String> {
 const DEFAULT_AGENT_MODEL: &str = "claude-opus-4-6";
 const DEFAULT_AGENT_SYSTEM_DATE: &str = "2026-03-31";
 const DEFAULT_AGENT_MAX_ITERATIONS: usize = 32;
+const MAX_AGENT_SPAWNS_PER_SESSION: usize = 32;
+
+fn resolve_agent_session_id(input: &AgentInput) -> String {
+    if let Some(value) = input
+        .session_id
+        .as_ref()
+        .map(|v| v.trim())
+        .filter(|v| !v.is_empty())
+    {
+        return value.to_string();
+    }
+
+    if let Ok(value) = std::env::var("EIDOLON_AGENT_SESSION") {
+        let trimmed = value.trim();
+        if !trimmed.is_empty() {
+            return trimmed.to_string();
+        }
+    }
+
+    String::from("default")
+}
+
+fn session_spawn_counter(session_id: &str) -> std::sync::Arc<std::sync::atomic::AtomicUsize> {
+    use std::sync::{atomic::AtomicUsize, Arc, Mutex, OnceLock};
+
+    static COUNTERS: OnceLock<Mutex<BTreeMap<String, Arc<AtomicUsize>>>> = OnceLock::new();
+    let counters = COUNTERS.get_or_init(|| Mutex::new(BTreeMap::new()));
+    let mut guard = counters.lock().expect("session spawn counters lock poisoned");
+    guard
+        .entry(session_id.to_string())
+        .or_insert_with(|| Arc::new(AtomicUsize::new(0)))
+        .clone()
+}
 
 fn execute_agent(input: AgentInput) -> Result<AgentOutput, String> {
     execute_agent_with_spawn(input, spawn_agent_job)
@@ -3002,6 +3249,7 @@ where
     let output_file = output_dir.join(format!("{agent_id}.md"));
     let manifest_file = output_dir.join(format!("{agent_id}.json"));
     let normalized_subagent_type = normalize_subagent_type(input.subagent_type.as_deref());
+    let session_id = resolve_agent_session_id(&input);
     let model = resolve_agent_model(input.model.as_deref());
     let agent_name = input
         .name
@@ -3055,6 +3303,7 @@ where
         prompt: input.prompt,
         system_prompt,
         allowed_tools,
+        session_id,
     };
     if let Err(error) = spawn_fn(job) {
         let error = format!("failed to spawn sub-agent: {error}");
@@ -3066,7 +3315,29 @@ where
 }
 
 fn spawn_agent_job(job: AgentJob) -> Result<(), String> {
+    if job.manifest.subagent_type.as_deref() == Some("Syndicate") {
+        if let Some(current_name) = std::thread::current().name() {
+            if current_name.starts_with("eidolon-agent-") {
+                return Err(String::from(
+                    "refusing Syndicate->Syndicate recursive spawn from sub-agent thread",
+                ));
+            }
+        }
+    }
+
+    let counter = session_spawn_counter(&job.session_id);
+    let prev = counter.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    if prev >= MAX_AGENT_SPAWNS_PER_SESSION {
+        counter.fetch_sub(1, std::sync::atomic::Ordering::Relaxed);
+        return Err(format!(
+            "agent spawn limit ({MAX_AGENT_SPAWNS_PER_SESSION}) reached for session '{}'",
+            job.session_id
+        ));
+    }
+
     let thread_name = format!("eidolon-agent-{}", job.manifest.agent_id);
+    let counter_for_thread = std::sync::Arc::clone(&counter);
+    let counter_for_spawn_error = std::sync::Arc::clone(&counter);
     std::thread::Builder::new()
         .name(thread_name)
         .spawn(move || {
@@ -3087,9 +3358,13 @@ fn spawn_agent_job(job: AgentJob) -> Result<(), String> {
                     );
                 }
             }
+            counter_for_thread.fetch_sub(1, std::sync::atomic::Ordering::Relaxed);
         })
         .map(|_| ())
-        .map_err(|error| error.to_string())
+        .map_err(|error| {
+            counter_for_spawn_error.fetch_sub(1, std::sync::atomic::Ordering::Relaxed);
+            error.to_string()
+        })
 }
 
 fn run_agent_job(job: &AgentJob) -> Result<(), String> {
@@ -3113,7 +3388,8 @@ fn build_agent_runtime(
     let api_client = ProviderRuntimeClient::new(model, allowed_tools.clone())?;
     let permission_policy = agent_permission_policy();
     let tool_executor = SubagentToolExecutor::new(allowed_tools)
-        .with_enforcer(PermissionEnforcer::new(permission_policy.clone()));
+        .with_enforcer(PermissionEnforcer::new(permission_policy.clone()))
+        .with_agent_id(job.manifest.agent_id.clone());
     Ok(ConversationRuntime::new(
         Session::new(),
         api_client,
@@ -3146,6 +3422,7 @@ fn resolve_agent_model(model: Option<&str>) -> String {
         .to_string()
 }
 
+#[allow(clippy::too_many_lines)]
 fn allowed_tools_for_subagent(subagent_type: &str) -> BTreeSet<String> {
     let tools = match subagent_type {
         "Explore" => vec![
@@ -3202,6 +3479,28 @@ fn allowed_tools_for_subagent(subagent_type: &str) -> BTreeSet<String> {
             "glob_search",
             "grep_search",
             "ToolSearch",
+        ],
+        "Syndicate" => vec![
+            "bash",
+            "read_file",
+            "write_file",
+            "edit_file",
+            "glob_search",
+            "grep_search",
+            "WebFetch",
+            "WebSearch",
+            "TodoWrite",
+            "Skill",
+            "ToolSearch",
+            "Sleep",
+            "SendUserMessage",
+            "StructuredOutput",
+            "REPL",
+            "PowerShell",
+            "SyndicateMemoryWrite",
+            "SyndicateMemoryRead",
+            "SyndicateMemoryLog",
+            "SyndicateMemorySearch",
         ],
         _ => vec![
             "bash",
@@ -3580,6 +3879,9 @@ impl ApiClient for ProviderRuntimeClient {
 struct SubagentToolExecutor {
     allowed_tools: BTreeSet<String>,
     enforcer: Option<PermissionEnforcer>,
+    /// When set, overrides any caller-supplied `agent_id` in syndicate memory
+    /// tools to prevent spoofing.
+    agent_id: Option<String>,
 }
 
 impl SubagentToolExecutor {
@@ -3587,11 +3889,17 @@ impl SubagentToolExecutor {
         Self {
             allowed_tools,
             enforcer: None,
+            agent_id: None,
         }
     }
 
     fn with_enforcer(mut self, enforcer: PermissionEnforcer) -> Self {
         self.enforcer = Some(enforcer);
+        self
+    }
+
+    fn with_agent_id(mut self, agent_id: String) -> Self {
+        self.agent_id = Some(agent_id);
         self
     }
 }
@@ -3603,8 +3911,19 @@ impl ToolExecutor for SubagentToolExecutor {
                 "tool `{tool_name}` is not enabled for this sub-agent"
             )));
         }
-        let value = serde_json::from_str(input)
+        let mut value: Value = serde_json::from_str(input)
             .map_err(|error| ToolError::new(format!("invalid tool input JSON: {error}")))?;
+
+        // Stamp the executor's verified agent_id onto syndicate memory tools
+        // so the LLM cannot spoof attribution.
+        if let Some(ref real_id) = self.agent_id {
+            if tool_name == "SyndicateMemoryWrite" || tool_name == "SyndicateMemoryLog" {
+                if let Some(obj) = value.as_object_mut() {
+                    obj.insert("agent_id".to_string(), Value::String(real_id.clone()));
+                }
+            }
+        }
+
         execute_tool_with_enforcer(self.enforcer.as_ref(), tool_name, &value)
             .map_err(ToolError::new)
     }
@@ -6128,6 +6447,7 @@ mod tests {
                 subagent_type: Some("Explore".to_string()),
                 name: Some("ship-audit".to_string()),
                 model: None,
+                session_id: None,
             },
             move |job| {
                 *captured_for_spawn
@@ -6209,6 +6529,7 @@ mod tests {
                 subagent_type: Some("Explore".to_string()),
                 name: Some("complete-task".to_string()),
                 model: Some("claude-sonnet-4-6".to_string()),
+                session_id: None,
             },
             |job| {
                 persist_agent_terminal_state(
@@ -6258,6 +6579,7 @@ mod tests {
                 subagent_type: Some("Verification".to_string()),
                 name: Some("fail-task".to_string()),
                 model: None,
+                session_id: None,
             },
             |job| {
                 persist_agent_terminal_state(
@@ -6305,6 +6627,7 @@ mod tests {
                 subagent_type: None,
                 name: Some("spawn-error".to_string()),
                 model: None,
+                session_id: None,
             },
             |_| Err(String::from("thread creation failed")),
         )
@@ -6459,6 +6782,10 @@ mod tests {
         assert!(general.contains("bash"));
         assert!(general.contains("write_file"));
         assert!(!general.contains("Agent"));
+
+        let syndicate = allowed_tools_for_subagent("Syndicate");
+        assert!(!syndicate.contains("Agent"));
+        assert!(syndicate.contains("SyndicateMemoryWrite"));
 
         let explore = allowed_tools_for_subagent("Explore");
         assert!(explore.contains("read_file"));

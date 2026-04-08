@@ -1,6 +1,7 @@
 use std::collections::BTreeMap;
 use std::env;
 use std::fmt;
+use std::fmt::Write as _;
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -8,6 +9,7 @@ use plugins::{PluginError, PluginManager, PluginSummary};
 use runtime::{
     compact_session, CompactionConfig, ConfigLoader, ConfigSource, McpOAuthConfig, McpServerConfig,
     ScopedMcpServerConfig, Session,
+    syndicate_collection::discover_collections,
 };
 use serde_json::{json, Value};
 
@@ -1046,6 +1048,13 @@ const SLASH_COMMAND_SPECS: &[SlashCommandSpec] = &[
         argument_hint: None,
         resume_supported: true,
     },
+    SlashCommandSpec {
+        name: "syndicate",
+        aliases: &[],
+        summary: "Run a named agent collection as a syndicate",
+        argument_hint: Some("[list | <collection> \"<task>\"]"),
+        resume_supported: false,
+    },
 ];
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -1187,6 +1196,9 @@ pub enum SlashCommand {
     },
     AddDir {
         path: Option<String>,
+    },
+    Syndicate {
+        args: Option<String>,
     },
     Unknown(String),
 }
@@ -1421,6 +1433,7 @@ pub fn validate_slash_command_input(
         "tag" => SlashCommand::Tag { label: remainder },
         "output-style" => SlashCommand::OutputStyle { style: remainder },
         "add-dir" => SlashCommand::AddDir { path: remainder },
+        "syndicate" => SlashCommand::Syndicate { args: remainder },
         other => SlashCommand::Unknown(other.to_string()),
     }))
 }
@@ -1795,7 +1808,7 @@ fn slash_command_category(name: &str) -> &'static str {
             "Workspace & git"
         }
         "agents" | "skills" | "teleport" | "debug-tool-call" | "mcp" | "context" | "tasks"
-        | "doctor" | "ide" | "desktop" => "Discovery & debugging",
+        | "doctor" | "ide" | "desktop" | "syndicate" => "Discovery & debugging",
         "bughunter" | "ultraplan" | "review" | "security-review" | "advisor" | "insights" => {
             "Analysis & automation"
         }
@@ -2367,6 +2380,70 @@ pub fn resolve_skill_path(cwd: &Path, skill: &str) -> std::io::Result<PathBuf> {
         std::io::ErrorKind::NotFound,
         format!("unknown skill: {requested}"),
     ))
+}
+
+#[must_use]
+pub fn handle_syndicate_slash_command(args: Option<&str>, cwd: &Path) -> String {
+    match normalize_optional_args(args) {
+        None | Some("list") => {
+            let collections = discover_collections(cwd);
+            if collections.is_empty() {
+                return "No syndicate collections found. Built-in collections: feature-build, research, code-review, refactor.".to_string();
+            }
+            let mut out = String::from("Available syndicate collections:\n\n");
+            for lc in &collections {
+                let _ = writeln!(
+                    out,
+                    "  {} — {} ({} agents)",
+                    lc.collection.name,
+                    lc.collection.description,
+                    lc.collection.agents.len()
+                );
+                for a in &lc.collection.agents {
+                    let _ = writeln!(out, "    • {} ({})", a.name, a.role);
+                }
+            }
+            out
+        }
+        Some(args) if is_help_arg(args) => {
+            "Usage: /syndicate [list | <collection> \"<task>\"]\n\
+             \n\
+             Subcommands:\n\
+             \n\
+             • list           — show available collections\n\
+             • <name> <task>  — run a collection on a task\n\
+             \n\
+             Example: /syndicate feature-build \"add dark mode support\""
+                .to_string()
+        }
+        Some(_) => {
+            "Syndicate runs are launched via the CLI: eidolon-cli syndicate <collection> \"<task>\"\n\
+             Use /syndicate list to see available collections."
+                .to_string()
+        }
+    }
+}
+
+#[must_use]
+pub fn handle_syndicate_slash_command_json(args: Option<&str>, cwd: &Path) -> Value {
+    match normalize_optional_args(args) {
+        None | Some("list") => {
+            let collections = discover_collections(cwd);
+            json!({
+                "kind": "syndicate_collections",
+                "collections": collections.iter().map(|lc| {
+                    json!({
+                        "name": lc.collection.name,
+                        "description": lc.collection.description,
+                        "agents": lc.collection.agents.iter().map(|a| {
+                            json!({ "name": a.name, "role": a.role })
+                        }).collect::<Vec<_>>(),
+                    })
+                }).collect::<Vec<_>>(),
+            })
+        }
+        _ => json!({ "kind": "syndicate_usage", "message": "Use /syndicate list or eidolon-cli syndicate <collection> \"<task>\"" }),
+    }
 }
 
 fn render_mcp_report_for(
@@ -3905,6 +3982,7 @@ pub fn handle_slash_command(
         | SlashCommand::Tag { .. }
         | SlashCommand::OutputStyle { .. }
         | SlashCommand::AddDir { .. }
+        | SlashCommand::Syndicate { .. }
         | SlashCommand::Unknown(_) => None,
     }
 }
@@ -4366,7 +4444,7 @@ mod tests {
         assert!(help.contains("/agents [list|help]"));
         assert!(help.contains("/skills [list|install <path>|help|<skill> [args]]"));
         assert!(help.contains("aliases: /skill"));
-        assert_eq!(slash_command_specs().len(), 141);
+        assert_eq!(slash_command_specs().len(), 142);
         assert!(resume_supported_slash_commands().len() >= 39);
     }
 
