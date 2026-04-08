@@ -163,12 +163,12 @@ Controls the local semantic workspace indexer. When enabled, Eidolon downloads a
     "maxFileSizeBytes": 524288,
     "autoContextTopK": 5,
     "autoContextEnabled": true,
-    "cacheDir": ".eidolon/index",
+    "cacheDir": ".eidolon/.index-cache",
     "excludedExtensions": [
-      "png", "jpg", "jpeg", "gif", "svg", "ico", "woff", "woff2", "ttf", "eot",
-      "mp3", "mp4", "wav", "avi", "mov", "pdf", "zip", "tar", "gz", "bz2",
-      "exe", "dll", "so", "dylib", "bin", "dat", "db", "sqlite", "lock",
-      "min.js", "min.css", "map", "wasm", "pyc", "pyo", "class", "o", "obj"
+      "png", "jpg", "jpeg", "gif", "bmp", "ico", "svg", "webp", "wasm", "lock",
+      "min.js", "min.css", "map", "bin", "exe", "dll", "so", "dylib", "o", "a",
+      "pyc", "class", "jar", "zip", "tar", "gz", "bz2", "7z", "rar", "pdf",
+      "doc", "docx"
     ]
   }
 }
@@ -185,7 +185,7 @@ Controls the local semantic workspace indexer. When enabled, Eidolon downloads a
 | `maxFileSizeBytes` | integer | `524288` (512 KB) | Files larger than this are skipped during indexing. |
 | `autoContextTopK` | integer | `5` | Number of top matching chunks to inject into the system prompt per turn. |
 | `autoContextEnabled` | boolean | `true` | Whether to automatically inject codebase context into the system prompt. Set to `false` to only use the explicit `semantic_search` tool. |
-| `cacheDir` | string | `".eidolon/index"` | Directory for the persisted index cache (relative to workspace root). |
+| `cacheDir` | string | `".eidolon/.index-cache"` | Directory for the persisted index cache (relative to workspace root). |
 | `excludedExtensions` | string[] | *(see above)* | File extensions to skip during discovery. Supports compound extensions like `"min.js"`. |
 
 ### How It Works

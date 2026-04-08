@@ -291,7 +291,7 @@ PR #3 added a local embedding-based codebase indexer that runs entirely in-proce
     │     │     ├── load_model() — BertModel from safetensors
     │     │     ├── load_cache() — attempt warm start from bincode
     │     │     ├── build_index() — discover → chunk → hash → embed
-    │     │     ├── save_cache() — atomic write to .eidolon/index/
+    │     │     ├── save_cache() — atomic write to .eidolon/.index-cache/
     │     │     └── publish embedder + index via OnceLock
     │     └── init_index_handle() — store in tools global
     └── IndexHandle cloned into ConversationRuntime
