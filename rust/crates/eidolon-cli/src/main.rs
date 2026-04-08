@@ -33,7 +33,9 @@ use api::{
 use commands::{
     classify_skills_slash_command, handle_agents_slash_command, handle_agents_slash_command_json,
     handle_mcp_slash_command, handle_mcp_slash_command_json, handle_plugins_slash_command,
-    handle_skills_slash_command, handle_skills_slash_command_json, render_slash_command_help,
+    handle_skills_slash_command, handle_skills_slash_command_json,
+    handle_syndicate_slash_command, handle_syndicate_slash_command_json,
+    render_slash_command_help,
     resume_supported_slash_commands, slash_command_specs, validate_slash_command_input,
     SkillSlashDispatch, SlashCommand,
 };
@@ -43,7 +45,10 @@ use render::{MarkdownStreamState, Spinner, TerminalRenderer};
 use runtime::{
     clear_oauth_credentials, format_usd, generate_pkce_pair, generate_state,
     load_oauth_credentials, load_system_prompt, parse_oauth_callback_request_target,
-    pricing_for_model, resolve_sandbox_status, save_oauth_credentials, ApiClient, ApiRequest,
+    pricing_for_model, resolve_sandbox_status, save_oauth_credentials,
+    syndicate_collection::{discover_collections, SyndicateCollection},
+    syndicate_orchestrator::{SyndicateOrchestrator, SyndicateRunConfig},
+    ApiClient, ApiRequest,
     AssistantEvent, CompactionConfig, ConfigLoader, ConfigSource, ContentBlock,
     ConversationMessage, ConversationRuntime, McpServerManager, McpTool, MessageRole, ModelPricing,
     OAuthAuthorizationRequest, OAuthConfig, OAuthTokenExchangeRequest, PermissionMode,
@@ -167,6 +172,13 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
         } => run_repl(model, allowed_tools, permission_mode)?,
         CliAction::HelpTopic(topic) => print_help_topic(topic),
         CliAction::Help { output_format } => print_help(output_format)?,
+        CliAction::Syndicate {
+            collection,
+            task,
+            list,
+            model,
+            output_format,
+        } => run_syndicate(collection, task, list, model, output_format)?,
     }
     Ok(())
 }
@@ -241,6 +253,13 @@ enum CliAction {
     HelpTopic(LocalHelpTopic),
     // prompt-mode formatting is only supported for non-interactive runs
     Help {
+        output_format: CliOutputFormat,
+    },
+    Syndicate {
+        collection: Option<String>,
+        task: Option<String>,
+        list: bool,
+        model: String,
         output_format: CliOutputFormat,
     },
 }
@@ -444,6 +463,35 @@ fn parse_args(args: &[String]) -> Result<CliAction, String> {
         "login" => Ok(CliAction::Login { output_format }),
         "logout" => Ok(CliAction::Logout { output_format }),
         "init" => Ok(CliAction::Init { output_format }),
+        "syndicate" => {
+            let sub_args = &rest[1..];
+            let list = sub_args.iter().any(|a| a == "--list" || a == "list");
+            if list {
+                Ok(CliAction::Syndicate {
+                    collection: None,
+                    task: None,
+                    list: true,
+                    model,
+                    output_format,
+                })
+            } else if sub_args.is_empty() {
+                Err("syndicate requires a collection name. Use `syndicate --list` to see available collections.".to_string())
+            } else {
+                let collection = sub_args[0].clone();
+                let task = if sub_args.len() > 1 {
+                    Some(sub_args[1..].join(" "))
+                } else {
+                    None
+                };
+                Ok(CliAction::Syndicate {
+                    collection: Some(collection),
+                    task,
+                    list: false,
+                    model,
+                    output_format,
+                })
+            }
+        }
         "prompt" => {
             let prompt = rest[1..].join(" ");
             if prompt.trim().is_empty() {
@@ -2321,6 +2369,14 @@ fn run_resume_command(
                 json: Some(handle_skills_slash_command_json(args.as_deref(), &cwd)?),
             })
         }
+        SlashCommand::Syndicate { args } => {
+            let cwd = env::current_dir()?;
+            Ok(ResumeCommandOutcome {
+                session: session.clone(),
+                message: Some(handle_syndicate_slash_command(args.as_deref(), &cwd)),
+                json: Some(handle_syndicate_slash_command_json(args.as_deref(), &cwd)),
+            })
+        }
         SlashCommand::Doctor => Ok(ResumeCommandOutcome {
             session: session.clone(),
             message: Some(render_doctor_report()?.render()),
@@ -3242,6 +3298,11 @@ impl LiveCli {
                         Self::print_skills(args.as_deref(), CliOutputFormat::Text)?;
                     }
                 }
+                false
+            }
+            SlashCommand::Syndicate { args } => {
+                let cwd = env::current_dir()?;
+                println!("{}", handle_syndicate_slash_command(args.as_deref(), &cwd));
                 false
             }
             SlashCommand::Doctor => {
@@ -4536,6 +4597,254 @@ fn init_json_value(message: &str) -> serde_json::Value {
         "kind": "init",
         "message": message,
     })
+}
+
+fn run_syndicate(
+    collection: Option<String>,
+    task: Option<String>,
+    list: bool,
+    model: String,
+    output_format: CliOutputFormat,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let cwd = env::current_dir()?;
+
+    if list {
+        let collections = discover_collections(&cwd);
+        match output_format {
+            CliOutputFormat::Text => {
+                println!("Available syndicate collections:\n");
+                for lc in &collections {
+                    let source_label = match &lc.source {
+                        runtime::syndicate_collection::CollectionSource::Builtin => {
+                            "built-in".to_string()
+                        }
+                        runtime::syndicate_collection::CollectionSource::Project(p) => {
+                            format!("project ({})", p.display())
+                        }
+                        runtime::syndicate_collection::CollectionSource::User(p) => {
+                            format!("user ({})", p.display())
+                        }
+                    };
+                    println!(
+                        "  {} — {} [{}]",
+                        lc.collection.name, lc.collection.description, source_label
+                    );
+                    for agent in &lc.collection.agents {
+                        println!("    • {} ({})", agent.name, agent.role);
+                    }
+                    println!();
+                }
+            }
+            CliOutputFormat::Json => {
+                let items: Vec<Value> = collections
+                    .iter()
+                    .map(|lc| {
+                        json!({
+                            "name": lc.collection.name,
+                            "description": lc.collection.description,
+                            "agents": lc.collection.agents.iter().map(|a| {
+                                json!({ "name": a.name, "role": a.role })
+                            }).collect::<Vec<_>>(),
+                        })
+                    })
+                    .collect();
+                println!(
+                    "{}",
+                    serde_json::to_string_pretty(&json!({
+                        "kind": "syndicate_collections",
+                        "collections": items,
+                    }))?
+                );
+            }
+        }
+        return Ok(());
+    }
+
+    let collection_name = collection.ok_or("collection name is required")?;
+    let task_str = task.ok_or(
+        "task description is required. Usage: eidolon-cli syndicate <collection> \"<task>\""
+    )?;
+
+    // Resolve session directory
+    let session_dir = cwd.join(".eidolon").join("syndicates");
+
+    let config = SyndicateRunConfig {
+        collection_name: collection_name.clone(),
+        task: task_str.clone(),
+        model: Some(model.clone()),
+        session_dir,
+    };
+
+    let mut orchestrator = SyndicateOrchestrator::new(config, &cwd)?;
+
+    match output_format {
+        CliOutputFormat::Text => {
+            println!(
+                "\n━━━ Syndicate: {} ━━━",
+                orchestrator.collection.name
+            );
+            println!("Session: {}", orchestrator.session_id);
+            println!("Task: {}", orchestrator.task);
+            println!(
+                "Agents: {}\n",
+                orchestrator
+                    .agents
+                    .iter()
+                    .map(|a| format!("{} ({})", a.name, a.role))
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            );
+        }
+        CliOutputFormat::Json => {
+            println!(
+                "{}",
+                serde_json::to_string_pretty(&json!({
+                    "kind": "syndicate_start",
+                    "session_id": orchestrator.session_id,
+                    "collection": orchestrator.collection.name,
+                    "task": orchestrator.task,
+                    "agents": orchestrator.agents.iter().map(|a| {
+                        json!({ "name": a.name, "role": a.role, "status": a.status.to_string() })
+                    }).collect::<Vec<Value>>(),
+                }))?
+            );
+        }
+    }
+
+    // Initialize shared syndicate memory for this session
+    tools::init_syndicate_memory(&orchestrator.memory_path)
+        .map_err(|e| format!("failed to init syndicate memory: {e}"))?;
+
+    // Spawn each agent via the Agent tool (which handles thread spawning internally)
+    let agent_defs = orchestrator.agent_defs().to_vec();
+    let mut manifest_files: Vec<(usize, PathBuf)> = Vec::new();
+
+    for (i, def) in agent_defs.iter().enumerate() {
+        orchestrator.mark_running(i);
+        let agent_prompt = orchestrator.build_agent_prompt(def);
+        let task_prompt = format!(
+            "{}\n\n## Task\n{}",
+            agent_prompt, orchestrator.task
+        );
+        let agent_model = def
+            .model
+            .clone()
+            .unwrap_or_else(|| model.clone());
+
+        if output_format == CliOutputFormat::Text {
+            println!("  ⟳ Spawning {} ({})...", def.name, def.role);
+        }
+
+        let agent_input = json!({
+            "description": format!("Syndicate agent: {} ({})", def.name, def.role),
+            "prompt": task_prompt,
+            "subagent_type": "Syndicate",
+            "name": format!("syndicate-{}", def.name),
+            "model": agent_model,
+        });
+
+        let result_json = tools::execute_tool("Agent", &agent_input)
+            .map_err(|e| format!("failed to spawn agent '{}': {e}", def.name))?;
+        let result: Value = serde_json::from_str(&result_json)?;
+        if let Some(mf) = result.get("manifestFile").and_then(|v| v.as_str()) {
+            manifest_files.push((i, PathBuf::from(mf)));
+        }
+    }
+
+    // Poll manifest files until all agents have completed or failed
+    let poll_interval = Duration::from_secs(2);
+    let timeout = Duration::from_secs(1800); // 30 minute timeout
+    let start = Instant::now();
+    let mut done: BTreeSet<usize> = BTreeSet::new();
+
+    while done.len() < manifest_files.len() && start.elapsed() < timeout {
+        thread::sleep(poll_interval);
+        for (i, mf_path) in &manifest_files {
+            if done.contains(i) {
+                continue;
+            }
+            if let Ok(contents) = fs::read_to_string(mf_path) {
+                if let Ok(manifest) = serde_json::from_str::<Value>(&contents) {
+                    let status = manifest
+                        .get("status")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("running");
+                    match status {
+                        "completed" => {
+                            orchestrator.mark_completed(*i);
+                            done.insert(*i);
+                            if output_format == CliOutputFormat::Text {
+                                println!(
+                                    "  ✓ {} completed",
+                                    orchestrator.agents[*i].name
+                                );
+                            }
+                        }
+                        "failed" => {
+                            let error = manifest
+                                .get("error")
+                                .and_then(|v| v.as_str())
+                                .unwrap_or("unknown error")
+                                .to_string();
+                            orchestrator.mark_failed(*i, error.clone());
+                            done.insert(*i);
+                            if output_format == CliOutputFormat::Text {
+                                eprintln!(
+                                    "  ✗ {} failed: {}",
+                                    orchestrator.agents[*i].name, error
+                                );
+                            }
+                        }
+                        _ => {} // still running
+                    }
+                }
+            }
+        }
+    }
+
+    // Mark any still-running agents as failed due to timeout
+    for (i, _) in &manifest_files {
+        if !done.contains(i) {
+            orchestrator.mark_failed(*i, "timed out after 30 minutes".into());
+            if output_format == CliOutputFormat::Text {
+                eprintln!(
+                    "  ✗ {} timed out",
+                    orchestrator.agents[*i].name
+                );
+            }
+        }
+    }
+
+    // Print summary
+    match output_format {
+        CliOutputFormat::Text => {
+            print!("{}", orchestrator.render_summary());
+        }
+        CliOutputFormat::Json => {
+            let result = orchestrator.result();
+            println!(
+                "{}",
+                serde_json::to_string_pretty(&json!({
+                    "kind": "syndicate_result",
+                    "session_id": result.session_id,
+                    "collection": result.collection_name,
+                    "task": result.task,
+                    "success": result.success,
+                    "agents": result.agents.iter().map(|a| {
+                        json!({
+                            "name": a.name,
+                            "role": a.role,
+                            "status": a.status.to_string(),
+                            "error": a.error,
+                        })
+                    }).collect::<Vec<Value>>(),
+                    "memory_path": result.memory_path,
+                }))?
+            );
+        }
+    }
+
+    Ok(())
 }
 
 fn normalize_permission_mode(mode: &str) -> Option<&'static str> {
