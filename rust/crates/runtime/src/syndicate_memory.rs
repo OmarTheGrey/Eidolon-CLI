@@ -193,18 +193,32 @@ impl SyndicateMemory {
         inner.log.clone()
     }
 
-    /// Number of key-value entries.
+    /// Number of key-value entries currently stored.
+    ///
+    /// This does not include append-only log records.
     #[must_use]
     pub fn len(&self) -> usize {
         let inner = self.inner.lock().expect("syndicate memory lock poisoned");
         inner.entries.len()
     }
 
-    /// Whether the store is empty (no entries and no log).
+    /// Whether there are zero key-value entries.
+    ///
+    /// This follows Rust collection conventions and only checks the entry map.
+    /// A non-empty log does not affect this result.
     #[must_use]
     pub fn is_empty(&self) -> bool {
         let inner = self.inner.lock().expect("syndicate memory lock poisoned");
-        inner.entries.is_empty() && inner.log.is_empty()
+        inner.entries.is_empty()
+    }
+
+    /// Number of append-only log records.
+    ///
+    /// This is independent of [`Self::len`], which only counts key-value entries.
+    #[must_use]
+    pub fn log_len(&self) -> usize {
+        let inner = self.inner.lock().expect("syndicate memory lock poisoned");
+        inner.log.len()
     }
 
     // ── internal ──
@@ -331,8 +345,19 @@ mod tests {
         let mem = SyndicateMemory::new();
         assert!(mem.is_empty());
         assert_eq!(mem.len(), 0);
+        assert_eq!(mem.log_len(), 0);
         mem.write("k", "v", "a").unwrap();
         assert!(!mem.is_empty());
         assert_eq!(mem.len(), 1);
+        assert_eq!(mem.log_len(), 0);
+    }
+
+    #[test]
+    fn is_empty_ignores_log_entries() {
+        let mem = SyndicateMemory::new();
+        mem.append_log("agent-1", "observe", None, "only log").unwrap();
+        assert!(mem.is_empty());
+        assert_eq!(mem.len(), 0);
+        assert_eq!(mem.log_len(), 1);
     }
 }
