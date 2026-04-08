@@ -52,11 +52,29 @@ All commands support `--output-format json` for machine-readable output — esse
 
 ## Model Aliases
 
+### Anthropic (default)
+
 | Alias | Resolves To |
 |---|---|
 | `opus` | `claude-opus-4-6` |
 | `sonnet` | `claude-sonnet-4-6` |
 | `haiku` | `claude-haiku-4-5-20251213` |
+
+### xAI (Grok)
+
+| Alias | Resolves To |
+|---|---|
+| `grok` | `grok-3` |
+| `grok-3` | `grok-3` |
+| `grok-mini` | `grok-3-mini` |
+| `grok-3-mini` | `grok-3-mini` |
+| `grok-2` | `grok-2` |
+
+Grok models require the `XAI_API_KEY` environment variable. The API endpoint can be overridden with `XAI_BASE_URL`.
+
+### OpenAI-Compatible Providers
+
+Any model name not matching a built-in alias is routed through the OpenAI-compatible provider. Set `OPENAI_API_KEY` and optionally `OPENAI_BASE_URL` to use third-party OpenAI-compatible endpoints.
 
 Pass `--model sonnet` or use the `/model` slash command in the REPL.
 
