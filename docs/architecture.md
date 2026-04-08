@@ -57,23 +57,44 @@ rust/
     │       ├── conversation.rs # Turn execution loop + auto-context injection
     │       ├── indexer.rs      # Background indexer thread + IndexHandle
     │       ├── session.rs      # Session persistence (JSONL)
+    │       ├── session_control.rs # Session lifecycle management
     │       ├── permissions.rs  # Permission evaluation
-    │       ├── permission_enforcer.rs
+    │       ├── permission_enforcer.rs # Per-tool-call permission enforcement
+    │       ├── policy_engine.rs # Git-aware permission policy evaluation
     │       ├── prompt.rs       # System prompt assembly
     │       ├── oauth.rs        # PKCE OAuth + credential storage
     │       ├── hooks.rs        # Pre/post tool-use hook execution
     │       ├── bash.rs         # Shell command execution
+    │       ├── bash_validation.rs # Shell command safety validation
+    │       ├── bootstrap.rs    # Runtime startup and initialization
     │       ├── sandbox.rs      # Container detection (Docker/Podman)
     │       ├── compact.rs      # Token-aware session compaction
+    │       ├── summary_compression.rs # Token-aware session summarization
     │       ├── file_ops.rs     # read_file, write_file, edit_file
+    │       ├── json.rs         # JSON parsing utilities
+    │       ├── mcp.rs          # MCP module root
     │       ├── mcp_client.rs   # MCP transport (stdio, websocket, remote)
     │       ├── mcp_stdio.rs    # MCP stdio subprocess management
     │       ├── mcp_tool_bridge.rs # Bridge MCP tools into the tool executor
     │       ├── mcp_lifecycle_hardened.rs # MCP server lifecycle validation
+    │       ├── lsp_client.rs   # Language Server Protocol client
     │       ├── plugin_lifecycle.rs # Plugin health and discovery
+    │       ├── branch_lock.rs  # Git branch locking
     │       ├── stale_branch.rs # Git branch freshness checks
-    │       ├── recovery_recipes.rs # Automatic error recovery
-    │       └── task_packet.rs  # Structured task/work packets
+    │       ├── green_contract.rs # Contract enforcement
+    │       ├── trust_resolver.rs # Trust and permission resolution
+    │       ├── recovery_recipes.rs # Automatic error recovery strategies
+    │       ├── remote.rs       # Remote execution support
+    │       ├── sse.rs          # Server-sent events for runtime
+    │       ├── usage.rs        # Token usage tracking
+    │       ├── task_packet.rs  # Structured task/work packets
+    │       ├── task_registry.rs # Task tracking registry
+    │       ├── lane_events.rs  # Lane/workflow event tracking
+    │       ├── worker_boot.rs  # Worker bootstrap and lifecycle
+    │       ├── team_cron_registry.rs # Team/worker scheduling
+    │       ├── syndicate_collection.rs # Syndicate collection discovery
+    │       ├── syndicate_memory.rs # Session-scoped shared memory
+    │       └── syndicate_orchestrator.rs # Multi-agent orchestration
     ├── commands/               # Slash command registry and dispatch
     │   └── src/lib.rs          # Command specs, validation, skill resolution
     ├── tools/                  # Tool implementations
