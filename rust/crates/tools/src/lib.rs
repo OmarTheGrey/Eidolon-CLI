@@ -68,27 +68,25 @@ fn global_worker_registry() -> &'static WorkerRegistry {
     REGISTRY.get_or_init(WorkerRegistry::new)
 }
 
-fn global_syndicate_memory() -> &'static SyndicateMemory {
+mod syndicate_mem_global {
     use std::sync::OnceLock;
-    static MEMORY: OnceLock<SyndicateMemory> = OnceLock::new();
-    MEMORY.get_or_init(SyndicateMemory::new)
+    use runtime::syndicate_memory::SyndicateMemory;
+    pub(super) static MEMORY: OnceLock<SyndicateMemory> = OnceLock::new();
 }
 
-/// Replace the global syndicate memory with a file-backed instance for a
-/// syndicate session. Must be called before agents use memory tools.
+fn global_syndicate_memory() -> &'static SyndicateMemory {
+    syndicate_mem_global::MEMORY
+        .get()
+        .expect("syndicate memory not initialized; call init_syndicate_memory first")
+}
+
+/// Initialise the global syndicate memory with a file-backed instance.
+/// Must be called exactly once before agents use memory tools.
 pub fn init_syndicate_memory(path: &std::path::Path) -> Result<(), String> {
-    // The OnceLock is already initialized with a default empty memory.
-    // We swap its contents by writing through the same Arc<Mutex<>>.
-    // Since SyndicateMemory uses interior mutability, the global ref stays valid.
     let backed = SyndicateMemory::with_path(path)?;
-    // Copy the backed instance's data into the global one.
-    for entry in backed.read_all() {
-        global_syndicate_memory().write(&entry.key, &entry.value, &entry.written_by)?;
-    }
-    for log in backed.log_entries() {
-        global_syndicate_memory().append_log(&log.agent_id, &log.operation, log.key.as_deref(), &log.detail)?;
-    }
-    Ok(())
+    syndicate_mem_global::MEMORY
+        .set(backed)
+        .map_err(|_| "syndicate memory already initialized".to_string())
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -1327,15 +1325,19 @@ fn execute_tool_with_enforcer(
         }
         // Syndicate memory tools
         "SyndicateMemoryWrite" => {
+            maybe_enforce_permission_check(enforcer, name, input)?;
             from_value::<SyndicateMemoryWriteInput>(input).and_then(run_syndicate_memory_write)
         }
         "SyndicateMemoryRead" => {
+            maybe_enforce_permission_check(enforcer, name, input)?;
             from_value::<SyndicateMemoryReadInput>(input).and_then(run_syndicate_memory_read)
         }
         "SyndicateMemoryLog" => {
+            maybe_enforce_permission_check(enforcer, name, input)?;
             from_value::<SyndicateMemoryLogInput>(input).and_then(run_syndicate_memory_log)
         }
         "SyndicateMemorySearch" => {
+            maybe_enforce_permission_check(enforcer, name, input)?;
             from_value::<SyndicateMemorySearchInput>(input).and_then(run_syndicate_memory_search)
         }
         _ => Err(format!("unsupported tool: {name}")),
@@ -2442,16 +2444,10 @@ struct SyndicateMemoryWriteInput {
     agent_id: String,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Default, Deserialize)]
 #[serde(default)]
 struct SyndicateMemoryReadInput {
     key: Option<String>,
-}
-
-impl Default for SyndicateMemoryReadInput {
-    fn default() -> Self {
-        Self { key: None }
-    }
 }
 
 #[derive(Debug, Deserialize)]
@@ -3195,6 +3191,10 @@ fn resolve_skill_path(skill: &str) -> Result<std::path::PathBuf, String> {
 const DEFAULT_AGENT_MODEL: &str = "claude-opus-4-6";
 const DEFAULT_AGENT_SYSTEM_DATE: &str = "2026-03-31";
 const DEFAULT_AGENT_MAX_ITERATIONS: usize = 32;
+const MAX_AGENT_SPAWNS: usize = 32;
+
+static AGENT_SPAWN_COUNT: std::sync::atomic::AtomicUsize =
+    std::sync::atomic::AtomicUsize::new(0);
 
 fn execute_agent(input: AgentInput) -> Result<AgentOutput, String> {
     execute_agent_with_spawn(input, spawn_agent_job)
@@ -3204,6 +3204,15 @@ fn execute_agent_with_spawn<F>(input: AgentInput, spawn_fn: F) -> Result<AgentOu
 where
     F: FnOnce(AgentJob) -> Result<(), String>,
 {
+    // Guard: cap total concurrent/cumulative agent spawns within this process.
+    let prev = AGENT_SPAWN_COUNT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    if prev >= MAX_AGENT_SPAWNS {
+        AGENT_SPAWN_COUNT.fetch_sub(1, std::sync::atomic::Ordering::Relaxed);
+        return Err(format!(
+            "agent spawn limit ({MAX_AGENT_SPAWNS}) reached — refusing to create more sub-agents"
+        ));
+    }
+
     if input.description.trim().is_empty() {
         return Err(String::from("description must not be empty"));
     }
@@ -3361,6 +3370,7 @@ fn resolve_agent_model(model: Option<&str>) -> String {
         .to_string()
 }
 
+#[allow(clippy::too_many_lines)]
 fn allowed_tools_for_subagent(subagent_type: &str) -> BTreeSet<String> {
     let tools = match subagent_type {
         "Explore" => vec![

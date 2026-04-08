@@ -308,7 +308,8 @@ mod tests {
         assert_eq!(orch.collection.name, "feature-build");
         assert_eq!(orch.agents.len(), 4);
         assert!(orch.session_id.starts_with("syndicate-"));
-        assert!(orch.memory_path.exists() || true); // path is set even if file not yet created
+        // memory_path is set even when the file doesn't exist yet.
+        assert!(orch.memory_path.to_str().is_some());
         let _ = fs::remove_dir_all(&dir);
     }
 

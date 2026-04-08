@@ -178,7 +178,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
             list,
             model,
             output_format,
-        } => run_syndicate(collection, task, list, model, output_format)?,
+        } => run_syndicate(collection, task, list, &model, output_format)?,
     }
     Ok(())
 }
@@ -464,9 +464,16 @@ fn parse_args(args: &[String]) -> Result<CliAction, String> {
         "logout" => Ok(CliAction::Logout { output_format }),
         "init" => Ok(CliAction::Init { output_format }),
         "syndicate" => {
+            if permission_mode_override.is_some() {
+                return Err("syndicate mode does not support --permission-mode (agents run with full access)".to_string());
+            }
+            if !allowed_tool_values.is_empty() {
+                return Err("syndicate mode does not support --allowedTools (agents use their collection-defined tool set)".to_string());
+            }
             let sub_args = &rest[1..];
-            let list = sub_args.iter().any(|a| a == "--list" || a == "list");
-            if list {
+            let has_list_flag = sub_args.iter().any(|a| a == "--list");
+            let first_is_list = sub_args.first().is_some_and(|a| a == "list");
+            if has_list_flag || first_is_list {
                 Ok(CliAction::Syndicate {
                     collection: None,
                     task: None,
@@ -4599,11 +4606,12 @@ fn init_json_value(message: &str) -> serde_json::Value {
     })
 }
 
+#[allow(clippy::too_many_lines)]
 fn run_syndicate(
     collection: Option<String>,
     task: Option<String>,
     list: bool,
-    model: String,
+    model: &str,
     output_format: CliOutputFormat,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let cwd = env::current_dir()?;
@@ -4671,44 +4679,28 @@ fn run_syndicate(
     let config = SyndicateRunConfig {
         collection_name: collection_name.clone(),
         task: task_str.clone(),
-        model: Some(model.clone()),
+        model: Some(model.to_string()),
         session_dir,
     };
 
     let mut orchestrator = SyndicateOrchestrator::new(config, &cwd)?;
 
-    match output_format {
-        CliOutputFormat::Text => {
-            println!(
-                "\n━━━ Syndicate: {} ━━━",
-                orchestrator.collection.name
-            );
-            println!("Session: {}", orchestrator.session_id);
-            println!("Task: {}", orchestrator.task);
-            println!(
-                "Agents: {}\n",
-                orchestrator
-                    .agents
-                    .iter()
-                    .map(|a| format!("{} ({})", a.name, a.role))
-                    .collect::<Vec<_>>()
-                    .join(", ")
-            );
-        }
-        CliOutputFormat::Json => {
-            println!(
-                "{}",
-                serde_json::to_string_pretty(&json!({
-                    "kind": "syndicate_start",
-                    "session_id": orchestrator.session_id,
-                    "collection": orchestrator.collection.name,
-                    "task": orchestrator.task,
-                    "agents": orchestrator.agents.iter().map(|a| {
-                        json!({ "name": a.name, "role": a.role, "status": a.status.to_string() })
-                    }).collect::<Vec<Value>>(),
-                }))?
-            );
-        }
+    if output_format == CliOutputFormat::Text {
+        println!(
+            "\n━━━ Syndicate: {} ━━━",
+            orchestrator.collection.name
+        );
+        println!("Session: {}", orchestrator.session_id);
+        println!("Task: {}", orchestrator.task);
+        println!(
+            "Agents: {}\n",
+            orchestrator
+                .agents
+                .iter()
+                .map(|a| format!("{} ({})", a.name, a.role))
+                .collect::<Vec<_>>()
+                .join(", ")
+        );
     }
 
     // Initialize shared syndicate memory for this session
@@ -4729,7 +4721,7 @@ fn run_syndicate(
         let agent_model = def
             .model
             .clone()
-            .unwrap_or_else(|| model.clone());
+            .unwrap_or_else(|| model.to_string());
 
         if output_format == CliOutputFormat::Text {
             println!("  ⟳ Spawning {} ({})...", def.name, def.role);
@@ -4748,6 +4740,15 @@ fn run_syndicate(
         let result: Value = serde_json::from_str(&result_json)?;
         if let Some(mf) = result.get("manifestFile").and_then(|v| v.as_str()) {
             manifest_files.push((i, PathBuf::from(mf)));
+        } else {
+            let error = format!(
+                "agent tool returned no manifestFile: {}",
+                result.get("error").and_then(|v| v.as_str()).unwrap_or("unknown")
+            );
+            orchestrator.mark_failed(i, error.clone());
+            if output_format == CliOutputFormat::Text {
+                eprintln!("  ✗ {} spawn failed: {}", def.name, error);
+            }
         }
     }
 

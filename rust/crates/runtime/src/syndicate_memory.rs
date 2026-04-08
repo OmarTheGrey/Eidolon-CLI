@@ -119,24 +119,20 @@ impl SyndicateMemory {
     pub fn write(&self, key: &str, value: &str, agent_id: &str) -> Result<MemoryEntry, String> {
         let mut inner = self.inner.lock().expect("syndicate memory lock poisoned");
         let ts = now_ms();
-        let entry = inner
-            .entries
-            .entry(key.to_owned())
-            .and_modify(|e| {
-                value.clone_into(&mut e.value);
-                agent_id.clone_into(&mut e.written_by);
-                e.updated_at = ts;
-            })
-            .or_insert_with(|| MemoryEntry {
-                key: key.to_owned(),
-                value: value.to_owned(),
-                written_by: agent_id.to_owned(),
-                created_at: ts,
-                updated_at: ts,
-            })
-            .clone();
-        Self::append_record(inner.path.as_ref(), &MemoryRecord::Entry(entry.clone()))?;
-        Ok(entry)
+        let new_entry = MemoryEntry {
+            key: key.to_owned(),
+            value: value.to_owned(),
+            written_by: agent_id.to_owned(),
+            created_at: inner
+                .entries
+                .get(key)
+                .map_or(ts, |existing| existing.created_at),
+            updated_at: ts,
+        };
+        // Persist first — only mutate in-memory state on success
+        Self::append_record(inner.path.as_ref(), &MemoryRecord::Entry(new_entry.clone()))?;
+        inner.entries.insert(key.to_owned(), new_entry.clone());
+        Ok(new_entry)
     }
 
     /// Read a single key. Returns `None` if the key doesn't exist.
@@ -169,8 +165,9 @@ impl SyndicateMemory {
             detail: detail.to_owned(),
             timestamp: now_ms(),
         };
-        inner.log.push(entry.clone());
+        // Persist first — only mutate in-memory state on success
         Self::append_record(inner.path.as_ref(), &MemoryRecord::Log(entry.clone()))?;
+        inner.log.push(entry.clone());
         Ok(entry)
     }
 
@@ -303,7 +300,8 @@ mod tests {
 
     #[test]
     fn persistence_round_trip() {
-        let dir = std::env::temp_dir().join("eidolon_syndicate_mem_test");
+        let dir = std::env::temp_dir()
+            .join(format!("eidolon_syndicate_mem_test_{}", std::process::id()));
         let _ = fs::remove_dir_all(&dir);
         fs::create_dir_all(&dir).unwrap();
         let path = dir.join("memory.jsonl");

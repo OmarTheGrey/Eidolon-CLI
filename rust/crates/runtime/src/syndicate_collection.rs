@@ -374,7 +374,17 @@ fn load_collection_file(path: &Path) -> Result<SyndicateCollection, String> {
 }
 
 /// Minimal TOML parser for syndicate collection files.
-/// Supports the subset needed: top-level `name`, `description`, and `[[agents]]` array.
+///
+/// Supports the subset needed for collection definitions:
+/// - Top-level `name` and `description` string fields.
+/// - `[[agents]]` array-of-tables with string, boolean, and string-array values.
+///
+/// **Known limitations** (intentional — avoids a full TOML dependency):
+/// - No multi-line strings (basic or literal).
+/// - No escape sequences inside quoted strings.
+/// - No inline tables or dotted keys.
+/// - No nested arrays beyond the simple `["a", "b"]` form used by `tools`.
+/// - Integer and float values are not parsed; everything is treated as a string.
 fn toml_parse(input: &str) -> Result<SyndicateCollection, String> {
     // We parse manually rather than adding a toml dependency, since the format
     // is simple and the runtime crate doesn't have toml in its deps.
