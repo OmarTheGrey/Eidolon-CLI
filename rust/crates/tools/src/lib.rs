@@ -3337,7 +3337,8 @@ fn build_agent_runtime(
     let api_client = ProviderRuntimeClient::new(model, allowed_tools.clone())?;
     let permission_policy = agent_permission_policy();
     let tool_executor = SubagentToolExecutor::new(allowed_tools)
-        .with_enforcer(PermissionEnforcer::new(permission_policy.clone()));
+        .with_enforcer(PermissionEnforcer::new(permission_policy.clone()))
+        .with_agent_id(job.manifest.agent_id.clone());
     Ok(ConversationRuntime::new(
         Session::new(),
         api_client,
@@ -3828,6 +3829,9 @@ impl ApiClient for ProviderRuntimeClient {
 struct SubagentToolExecutor {
     allowed_tools: BTreeSet<String>,
     enforcer: Option<PermissionEnforcer>,
+    /// When set, overrides any caller-supplied `agent_id` in syndicate memory
+    /// tools to prevent spoofing.
+    agent_id: Option<String>,
 }
 
 impl SubagentToolExecutor {
@@ -3835,11 +3839,17 @@ impl SubagentToolExecutor {
         Self {
             allowed_tools,
             enforcer: None,
+            agent_id: None,
         }
     }
 
     fn with_enforcer(mut self, enforcer: PermissionEnforcer) -> Self {
         self.enforcer = Some(enforcer);
+        self
+    }
+
+    fn with_agent_id(mut self, agent_id: String) -> Self {
+        self.agent_id = Some(agent_id);
         self
     }
 }
@@ -3851,8 +3861,19 @@ impl ToolExecutor for SubagentToolExecutor {
                 "tool `{tool_name}` is not enabled for this sub-agent"
             )));
         }
-        let value = serde_json::from_str(input)
+        let mut value: Value = serde_json::from_str(input)
             .map_err(|error| ToolError::new(format!("invalid tool input JSON: {error}")))?;
+
+        // Stamp the executor's verified agent_id onto syndicate memory tools
+        // so the LLM cannot spoof attribution.
+        if let Some(ref real_id) = self.agent_id {
+            if tool_name == "SyndicateMemoryWrite" || tool_name == "SyndicateMemoryLog" {
+                if let Some(obj) = value.as_object_mut() {
+                    obj.insert("agent_id".to_string(), Value::String(real_id.clone()));
+                }
+            }
+        }
+
         execute_tool_with_enforcer(self.enforcer.as_ref(), tool_name, &value)
             .map_err(ToolError::new)
     }
