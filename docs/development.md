@@ -4,15 +4,16 @@ Guide for contributing to or extending the Eidolon agent runtime. The architectu
 
 ## Workspace Layout
 
-The Rust workspace lives under `rust/` and contains 8 crates:
+The Rust workspace lives under `rust/` and contains 9 crates:
 
 | Crate | Type | Purpose |
 |---|---|---|
 | `eidolon-cli` | Binary | CLI entry point, REPL, TUI rendering |
 | `api` | Library | HTTP clients for Anthropic, OpenAI, xAI |
-| `runtime` | Library | Core engine — config, sessions, permissions, MCP, OAuth |
+| `runtime` | Library | Core engine — config, sessions, permissions, MCP, OAuth, indexer |
 | `commands` | Library | Slash command registry and dispatch |
-| `tools` | Library | Tool implementations (bash, file ops, agents, skills) |
+| `tools` | Library | Tool implementations (bash, file ops, agents, skills, semantic search) |
+| `indexing` | Library | Semantic workspace indexing (Candle BERT, chunking, search, cache) |
 | `plugins` | Library | Plugin system — hooks, lifecycle, registry |
 | `telemetry` | Library | Tracing, analytics, client identity |
 | `mock-anthropic-service` | Binary | Mock Anthropic API for tests |
@@ -195,6 +196,17 @@ Session serialization lives in `runtime/src/session.rs`. The primary format is J
 ### System Prompt
 
 The system prompt is assembled in `runtime/src/prompt.rs` from project context, instruction files, and tool descriptions.
+
+### Indexing Pipeline
+
+The semantic indexer lives in the `indexing` crate, which is a self-contained pipeline with no runtime dependencies. To extend it:
+
+- **Add file filters** in `indexing/src/discovery.rs` — modify `is_excluded_extension()` or the walker config
+- **Change chunking strategy** in `indexing/src/chunker.rs` — the current approach is line-based sliding windows
+- **Swap models** by changing `modelId` in config — any HuggingFace BERT-compatible model works (output dimensions adjust automatically)
+- **Improve search** in `indexing/src/search.rs` — currently brute-force; could be replaced with HNSW for larger codebases
+
+The runtime wraps indexing in `runtime/src/indexer.rs` (`BackgroundIndexer` + `IndexHandle`). For testing, use `IndexHandle::ready_for_test()` or `IndexHandle::not_ready_for_test()` constructors (available under `#[cfg(test)]` or the `test-support` feature).
 
 ## Code Style
 

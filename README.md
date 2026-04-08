@@ -25,6 +25,7 @@ This project is built following the **Regula Framework** — a set of agentic de
 - **Syndicate mode** — launch pre-defined multi-agent collections for coordinated coding runs
 - **Plugin hooks** — pre/post tool-use lifecycle hooks via shell scripts for audit, validation, or custom logic
 - **MCP integration** — connect external tool servers over stdio, WebSocket, or HTTP transports
+- **Semantic workspace indexing** — local Candle-based embeddings (all-MiniLM-L6-v2) for codebase-aware search and automatic context injection
 - **Session persistence** — JSONL-based conversation history with token-aware automatic compaction
 - **Multi-provider support** — Anthropic Claude, OpenAI, and xAI Grok via a unified provider abstraction
 - **OAuth & API key auth** — built-in PKCE OAuth flow or simple environment variable auth
@@ -91,6 +92,29 @@ Syndicate runs now include:
 - Spawn safety guards (session spawn cap and Syndicate recursion protection)
 - Correct failure accounting when an individual agent spawn fails
 
+## Semantic Workspace Indexing
+
+PR #3 introduced a **local semantic indexing system** that gives the agent deep codebase awareness without external services.
+
+When enabled, a background thread downloads and runs the `all-MiniLM-L6-v2` sentence transformer model (~80 MB) via [Candle](https://github.com/huggingface/candle) (pure Rust, no Python required). It walks the workspace, chunks source files, and builds a 384-dimensional vector index that supports:
+
+- **`semantic_search` tool** — the model can query the index for code snippets semantically related to any natural language query
+- **Auto-context injection** — each conversation turn automatically embeds the user's message and injects the most relevant code snippets into the system prompt, so the agent starts every response with workspace awareness
+- **Incremental rebuilds** — file content hashes allow the index to skip unchanged files on restart
+- **Disk caching** — the built index is persisted to `.eidolon/index/` for fast warm starts
+
+Enable it in `.eidolon.json`:
+
+```json
+{
+  "indexing": {
+    "enabled": true
+  }
+}
+```
+
+See [Configuration](docs/configuration.md) for the full set of indexing options.
+
 ## Documentation
 
 | Document | Description |
@@ -112,6 +136,7 @@ rust/                    # Rust workspace
 │   ├── runtime/         # Core engine — config, sessions, MCP, permissions
 │   ├── commands/        # Slash command registry
 │   ├── tools/           # Tool implementations (bash, file ops, agents)
+│   ├── indexing/        # Semantic workspace indexing (Candle embeddings)
 │   ├── plugins/         # Plugin system and hooks
 │   ├── telemetry/       # Tracing and analytics
 │   └── mock-anthropic-service/  # Mock API for testing
@@ -135,6 +160,9 @@ Eidolon is built on top of excellent open-source Rust crates:
 | [sha2](https://crates.io/crates/sha2) | SHA-2 hashing |
 | [glob](https://crates.io/crates/glob) | File pattern matching |
 | [walkdir](https://crates.io/crates/walkdir) | Recursive directory traversal |
+| [candle](https://crates.io/crates/candle-core) | Pure-Rust ML inference (BERT embeddings) |
+| [tokenizers](https://crates.io/crates/tokenizers) | HuggingFace tokenizer (WordPiece) |
+| [hf-hub](https://crates.io/crates/hf-hub) | HuggingFace model downloads |
 
 ## Author
 
