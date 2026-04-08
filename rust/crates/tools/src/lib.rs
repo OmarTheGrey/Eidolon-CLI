@@ -19,6 +19,7 @@ use runtime::{
     read_file,
     summary_compression::compress_summary_text,
     task_registry::TaskRegistry,
+    syndicate_memory::SyndicateMemory,
     team_cron_registry::{CronRegistry, TeamRegistry},
     worker_boot::{WorkerReadySnapshot, WorkerRegistry},
     write_file, ApiClient, ApiRequest, AssistantEvent, BashCommandInput, BashCommandOutput,
@@ -65,6 +66,29 @@ fn global_worker_registry() -> &'static WorkerRegistry {
     use std::sync::OnceLock;
     static REGISTRY: OnceLock<WorkerRegistry> = OnceLock::new();
     REGISTRY.get_or_init(WorkerRegistry::new)
+}
+
+fn global_syndicate_memory() -> &'static SyndicateMemory {
+    use std::sync::OnceLock;
+    static MEMORY: OnceLock<SyndicateMemory> = OnceLock::new();
+    MEMORY.get_or_init(SyndicateMemory::new)
+}
+
+/// Replace the global syndicate memory with a file-backed instance for a
+/// syndicate session. Must be called before agents use memory tools.
+pub fn init_syndicate_memory(path: &std::path::Path) -> Result<(), String> {
+    // The OnceLock is already initialized with a default empty memory.
+    // We swap its contents by writing through the same Arc<Mutex<>>.
+    // Since SyndicateMemory uses interior mutability, the global ref stays valid.
+    let backed = SyndicateMemory::with_path(path)?;
+    // Copy the backed instance's data into the global one.
+    for entry in backed.read_all() {
+        global_syndicate_memory().write(&entry.key, &entry.value, &entry.written_by)?;
+    }
+    for log in backed.log_entries() {
+        global_syndicate_memory().append_log(&log.agent_id, &log.operation, log.key.as_deref(), &log.detail)?;
+    }
+    Ok(())
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -1137,6 +1161,63 @@ pub fn mvp_tool_specs() -> Vec<ToolSpec> {
             }),
             required_permission: PermissionMode::DangerFullAccess,
         },
+        // ── Syndicate memory tools ──────────────────────────────────────
+        ToolSpec {
+            name: "SyndicateMemoryWrite",
+            description: "Write a key-value pair to syndicate shared memory. Other agents in the syndicate can read this.",
+            input_schema: json!({
+                "type": "object",
+                "properties": {
+                    "key": { "type": "string", "description": "The memory key (e.g. 'plan', 'status', 'findings')." },
+                    "value": { "type": "string", "description": "The value to store." },
+                    "agent_id": { "type": "string", "description": "Your agent identifier." }
+                },
+                "required": ["key", "value", "agent_id"],
+                "additionalProperties": false
+            }),
+            required_permission: PermissionMode::DangerFullAccess,
+        },
+        ToolSpec {
+            name: "SyndicateMemoryRead",
+            description: "Read from syndicate shared memory. Omit 'key' to read all entries.",
+            input_schema: json!({
+                "type": "object",
+                "properties": {
+                    "key": { "type": "string", "description": "Specific key to read. Omit to read all." }
+                },
+                "additionalProperties": false
+            }),
+            required_permission: PermissionMode::ReadOnly,
+        },
+        ToolSpec {
+            name: "SyndicateMemoryLog",
+            description: "Append a structured observation to the syndicate's shared log.",
+            input_schema: json!({
+                "type": "object",
+                "properties": {
+                    "agent_id": { "type": "string", "description": "Your agent identifier." },
+                    "operation": { "type": "string", "description": "What you did (e.g. 'analyze', 'implement', 'review')." },
+                    "key": { "type": "string", "description": "Related memory key, if any." },
+                    "detail": { "type": "string", "description": "Observation or note." }
+                },
+                "required": ["agent_id", "operation", "detail"],
+                "additionalProperties": false
+            }),
+            required_permission: PermissionMode::DangerFullAccess,
+        },
+        ToolSpec {
+            name: "SyndicateMemorySearch",
+            description: "Search syndicate shared memory entries by keyword (case-insensitive match on key and value).",
+            input_schema: json!({
+                "type": "object",
+                "properties": {
+                    "query": { "type": "string", "description": "Search term." }
+                },
+                "required": ["query"],
+                "additionalProperties": false
+            }),
+            required_permission: PermissionMode::ReadOnly,
+        },
     ]
 }
 
@@ -1243,6 +1324,19 @@ fn execute_tool_with_enforcer(
         "MCP" => from_value::<McpToolInput>(input).and_then(run_mcp_tool),
         "TestingPermission" => {
             from_value::<TestingPermissionInput>(input).and_then(run_testing_permission)
+        }
+        // Syndicate memory tools
+        "SyndicateMemoryWrite" => {
+            from_value::<SyndicateMemoryWriteInput>(input).and_then(run_syndicate_memory_write)
+        }
+        "SyndicateMemoryRead" => {
+            from_value::<SyndicateMemoryReadInput>(input).and_then(run_syndicate_memory_read)
+        }
+        "SyndicateMemoryLog" => {
+            from_value::<SyndicateMemoryLogInput>(input).and_then(run_syndicate_memory_log)
+        }
+        "SyndicateMemorySearch" => {
+            from_value::<SyndicateMemorySearchInput>(input).and_then(run_syndicate_memory_search)
         }
         _ => Err(format!("unsupported tool: {name}")),
     }
@@ -1560,6 +1654,92 @@ fn run_cron_list(_input: Value) -> Result<String, String> {
     to_pretty_json(json!({
         "crons": entries,
         "count": entries.len()
+    }))
+}
+
+// ── Syndicate memory tool implementations ──
+
+#[allow(clippy::needless_pass_by_value)]
+fn run_syndicate_memory_write(input: SyndicateMemoryWriteInput) -> Result<String, String> {
+    let entry = global_syndicate_memory().write(&input.key, &input.value, &input.agent_id)?;
+    to_pretty_json(json!({
+        "status": "written",
+        "key": entry.key,
+        "written_by": entry.written_by,
+        "updated_at": entry.updated_at
+    }))
+}
+
+#[allow(clippy::needless_pass_by_value)]
+fn run_syndicate_memory_read(input: SyndicateMemoryReadInput) -> Result<String, String> {
+    let mem = global_syndicate_memory();
+    if let Some(key) = &input.key {
+        match mem.read(key) {
+            Some(entry) => to_pretty_json(json!({
+                "key": entry.key,
+                "value": entry.value,
+                "written_by": entry.written_by,
+                "updated_at": entry.updated_at
+            })),
+            None => to_pretty_json(json!({
+                "key": key,
+                "error": "key not found"
+            })),
+        }
+    } else {
+        let entries: Vec<_> = mem
+            .read_all()
+            .into_iter()
+            .map(|e| {
+                json!({
+                    "key": e.key,
+                    "value": e.value,
+                    "written_by": e.written_by,
+                    "updated_at": e.updated_at
+                })
+            })
+            .collect();
+        to_pretty_json(json!({
+            "entries": entries,
+            "count": entries.len()
+        }))
+    }
+}
+
+#[allow(clippy::needless_pass_by_value)]
+fn run_syndicate_memory_log(input: SyndicateMemoryLogInput) -> Result<String, String> {
+    let entry = global_syndicate_memory().append_log(
+        &input.agent_id,
+        &input.operation,
+        input.key.as_deref(),
+        &input.detail,
+    )?;
+    to_pretty_json(json!({
+        "status": "logged",
+        "agent_id": entry.agent_id,
+        "operation": entry.operation,
+        "timestamp": entry.timestamp
+    }))
+}
+
+#[allow(clippy::needless_pass_by_value)]
+fn run_syndicate_memory_search(input: SyndicateMemorySearchInput) -> Result<String, String> {
+    let results: Vec<_> = global_syndicate_memory()
+        .search(&input.query)
+        .into_iter()
+        .map(|e| {
+            json!({
+                "key": e.key,
+                "value": e.value,
+                "written_by": e.written_by,
+                "updated_at": e.updated_at
+            })
+        })
+        .collect();
+    to_pretty_json(json!({
+        "query": input.query,
+        "results": results,
+        "count": results.len()
     }))
 }
 
@@ -2251,6 +2431,41 @@ struct CronCreateInput {
 #[derive(Debug, Deserialize)]
 struct CronDeleteInput {
     cron_id: String,
+}
+
+// ── Syndicate memory input types ──
+
+#[derive(Debug, Deserialize)]
+struct SyndicateMemoryWriteInput {
+    key: String,
+    value: String,
+    agent_id: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(default)]
+struct SyndicateMemoryReadInput {
+    key: Option<String>,
+}
+
+impl Default for SyndicateMemoryReadInput {
+    fn default() -> Self {
+        Self { key: None }
+    }
+}
+
+#[derive(Debug, Deserialize)]
+struct SyndicateMemoryLogInput {
+    agent_id: String,
+    operation: String,
+    #[serde(default)]
+    key: Option<String>,
+    detail: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct SyndicateMemorySearchInput {
+    query: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -3202,6 +3417,29 @@ fn allowed_tools_for_subagent(subagent_type: &str) -> BTreeSet<String> {
             "glob_search",
             "grep_search",
             "ToolSearch",
+        ],
+        "Syndicate" => vec![
+            "bash",
+            "read_file",
+            "write_file",
+            "edit_file",
+            "glob_search",
+            "grep_search",
+            "WebFetch",
+            "WebSearch",
+            "TodoWrite",
+            "Skill",
+            "ToolSearch",
+            "Agent",
+            "Sleep",
+            "SendUserMessage",
+            "StructuredOutput",
+            "REPL",
+            "PowerShell",
+            "SyndicateMemoryWrite",
+            "SyndicateMemoryRead",
+            "SyndicateMemoryLog",
+            "SyndicateMemorySearch",
         ],
         _ => vec![
             "bash",
