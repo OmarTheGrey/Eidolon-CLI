@@ -328,6 +328,46 @@ This exposes:
 
 Combined with the existing MCP client support, Eidolon is now **bidirectional** with MCP — it both consumes and exposes tools through the same protocol.
 
+## OpenAI-Compatible API Server
+
+Eidolon can run as an HTTP server that implements the OpenAI Chat Completions API, making it usable as a drop-in backend for any OpenAI-compatible frontend.
+
+```bash
+eidolon-cli serve --bind 127.0.0.1:8080
+```
+
+### Endpoints
+
+| Method | Path | Description |
+|--------|------|-------------|
+| POST | `/v1/chat/completions` | Chat completion (streaming and non-streaming) |
+| GET | `/v1/models` | List available models |
+| GET | `/health` | Server health check |
+
+### Compatible Frontends
+
+Any application that supports the OpenAI API can point at Eidolon's server:
+- [Open WebUI](https://github.com/open-webui/open-webui)
+- [LobeChat](https://github.com/lobehub/lobe-chat)
+- [LibreChat](https://github.com/danny-avila/LibreChat)
+- [NextChat](https://github.com/ChatGPTNextWeb/ChatGPT-Next-Web)
+- [Jan](https://github.com/janhq/jan)
+
+### Session Persistence
+
+By default, each request is stateless. To maintain conversation context across requests, include the `X-Eidolon-Session-Id` header:
+
+```bash
+curl http://localhost:8080/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -H "X-Eidolon-Session-Id: my-session" \
+  -d '{"model": "sonnet", "messages": [{"role": "user", "content": "hello"}]}'
+```
+
+### Authentication
+
+Optionally protect the server with a bearer token configured at startup. Requests must include `Authorization: Bearer <token>`.
+
 ## Inline Diff Previews
 
 When the agent edits or overwrites a file, the terminal shows a proper unified diff preview with `@@ hunk headers`, colored additions/removals, and dimmed context lines. This gives immediate visibility into what changed without needing to inspect the file manually.
