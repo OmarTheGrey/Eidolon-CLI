@@ -6509,24 +6509,64 @@ fn format_write_result(icon: &str, parsed: &serde_json::Value) -> String {
         .get("content")
         .and_then(|value| value.as_str())
         .map_or(0, |content| content.lines().count());
-    format!(
+    let header = format!(
         "{icon} \x1b[1;32m✏️ {} {path}\x1b[0m \x1b[2m({line_count} lines)\x1b[0m",
         if kind == "create" { "Wrote" } else { "Updated" },
-    )
+    );
+    if kind == "update" {
+        if let Some(preview) = format_structured_patch_preview(parsed) {
+            return format!("{header}\n{preview}");
+        }
+    }
+    header
 }
 
 fn format_structured_patch_preview(parsed: &serde_json::Value) -> Option<String> {
     let hunks = parsed.get("structuredPatch")?.as_array()?;
     let mut preview = Vec::new();
-    for hunk in hunks.iter().take(2) {
-        let lines = hunk.get("lines")?.as_array()?;
-        for line in lines.iter().filter_map(|value| value.as_str()).take(6) {
+    for hunk in hunks.iter().take(4) {
+        let old_start = hunk
+            .get("oldStart")
+            .and_then(serde_json::Value::as_u64)
+            .unwrap_or(1);
+        let old_lines = hunk
+            .get("oldLines")
+            .and_then(serde_json::Value::as_u64)
+            .unwrap_or(0);
+        let new_start = hunk
+            .get("newStart")
+            .and_then(serde_json::Value::as_u64)
+            .unwrap_or(1);
+        let new_lines = hunk
+            .get("newLines")
+            .and_then(serde_json::Value::as_u64)
+            .unwrap_or(0);
+        if !preview.is_empty() {
+            preview.push(String::new());
+        }
+        preview.push(format!(
+            "\x1b[36m@@ -{old_start},{old_lines} +{new_start},{new_lines} @@\x1b[0m"
+        ));
+        let Some(lines) = hunk.get("lines").and_then(serde_json::Value::as_array) else {
+            continue;
+        };
+        for line in lines.iter().filter_map(|value| value.as_str()).take(12) {
             match line.chars().next() {
                 Some('+') => preview.push(format!("\x1b[38;5;70m{line}\x1b[0m")),
                 Some('-') => preview.push(format!("\x1b[38;5;203m{line}\x1b[0m")),
-                _ => preview.push(line.to_string()),
+                _ => preview.push(format!("\x1b[2m{line}\x1b[0m")),
             }
         }
+        if lines.len() > 12 {
+            preview.push(format!(
+                "\x1b[2m  … {} more lines in this hunk\x1b[0m",
+                lines.len() - 12
+            ));
+        }
+    }
+    let remaining = hunks.len().saturating_sub(4);
+    if remaining > 0 {
+        preview.push(format!("\x1b[2m  … {remaining} more hunks\x1b[0m"));
     }
     if preview.is_empty() {
         None
@@ -6880,7 +6920,7 @@ impl CliToolExecutor {
 }
 
 impl ToolExecutor for CliToolExecutor {
-    fn execute(&mut self, tool_name: &str, input: &str) -> Result<String, ToolError> {
+    fn execute(&self, tool_name: &str, input: &str) -> Result<String, ToolError> {
         if self
             .allowed_tools
             .as_ref()
@@ -6921,6 +6961,22 @@ impl ToolExecutor for CliToolExecutor {
                 Err(error)
             }
         }
+    }
+
+    fn is_read_only(&self, tool_name: &str) -> bool {
+        matches!(
+            tool_name,
+            "read_file"
+                | "Read"
+                | "glob_search"
+                | "Glob"
+                | "grep_search"
+                | "Grep"
+                | "semantic_search"
+                | "TodoRead"
+                | "SyndicateMemoryRead"
+                | "SyndicateMemorySearch"
+        )
     }
 }
 
@@ -9229,7 +9285,7 @@ UU conflicted.rs",
         assert!(allowed.contains("mcp__alpha__echo"));
         assert!(allowed.contains("MCPTool"));
 
-        let mut executor = CliToolExecutor::new(
+        let executor = CliToolExecutor::new(
             None,
             false,
             state.tool_registry.clone(),
@@ -9327,7 +9383,7 @@ UU conflicted.rs",
         let runtime_config = loader.load().expect("runtime config should load");
         let state = build_runtime_plugin_state_with_loader(&workspace, &loader, &runtime_config)
             .expect("runtime plugin state should load");
-        let mut executor = CliToolExecutor::new(
+        let executor = CliToolExecutor::new(
             None,
             false,
             state.tool_registry.clone(),

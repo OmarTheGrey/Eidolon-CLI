@@ -508,21 +508,58 @@ fn apply_limit<T>(
 }
 
 fn make_patch(original: &str, updated: &str) -> Vec<StructuredPatchHunk> {
-    let mut lines = Vec::new();
-    for line in original.lines() {
-        lines.push(format!("-{line}"));
-    }
-    for line in updated.lines() {
-        lines.push(format!("+{line}"));
+    use similar::{ChangeTag, TextDiff};
+
+    let diff = TextDiff::from_lines(original, updated);
+    let mut hunks = Vec::new();
+
+    for group in diff.grouped_ops(3) {
+        let mut lines = Vec::new();
+        let mut old_start = 0;
+        let mut old_count = 0;
+        let mut new_start = 0;
+        let mut new_count = 0;
+        let mut first = true;
+
+        for op in &group {
+            if first {
+                old_start = op.old_range().start + 1;
+                new_start = op.new_range().start + 1;
+                first = false;
+            }
+
+            for change in diff.iter_changes(op) {
+                let text = change.value().trim_end_matches('\n');
+                match change.tag() {
+                    ChangeTag::Equal => {
+                        lines.push(format!(" {text}"));
+                        old_count += 1;
+                        new_count += 1;
+                    }
+                    ChangeTag::Delete => {
+                        lines.push(format!("-{text}"));
+                        old_count += 1;
+                    }
+                    ChangeTag::Insert => {
+                        lines.push(format!("+{text}"));
+                        new_count += 1;
+                    }
+                }
+            }
+        }
+
+        if !lines.is_empty() {
+            hunks.push(StructuredPatchHunk {
+                old_start,
+                old_lines: old_count,
+                new_start,
+                new_lines: new_count,
+                lines,
+            });
+        }
     }
 
-    vec![StructuredPatchHunk {
-        old_start: 1,
-        old_lines: original.lines().count(),
-        new_start: 1,
-        new_lines: updated.lines().count(),
-        lines,
-    }]
+    hunks
 }
 
 fn normalize_path(path: &str) -> io::Result<PathBuf> {
@@ -758,5 +795,57 @@ mod tests {
         })
         .expect("grep should succeed");
         assert!(grep_output.content.unwrap_or_default().contains("hello"));
+    }
+
+    #[test]
+    fn make_patch_produces_unified_hunks() {
+        use super::make_patch;
+
+        let original = "line 1\nline 2\nline 3\nline 4\nline 5\n";
+        let updated = "line 1\nline 2\nchanged 3\nline 4\nline 5\n";
+
+        let hunks = make_patch(original, updated);
+        assert_eq!(hunks.len(), 1, "single change = single hunk");
+        let hunk = &hunks[0];
+
+        // Hunk must contain the actual change lines.
+        let has_removed = hunk.lines.iter().any(|l| l == "-line 3");
+        let has_added = hunk.lines.iter().any(|l| l == "+changed 3");
+        assert!(has_removed, "should include removed line: {:?}", hunk.lines);
+        assert!(has_added, "should include added line: {:?}", hunk.lines);
+
+        // Hunk must contain context lines (not just the whole file).
+        let context_count = hunk.lines.iter().filter(|l| l.starts_with(' ')).count();
+        assert!(
+            context_count > 0 && context_count < 5,
+            "should have a few context lines, not the whole file: {context_count}"
+        );
+    }
+
+    #[test]
+    fn make_patch_handles_multiple_changes() {
+        use super::make_patch;
+
+        let original = (1..=20).map(|i| format!("line {i}")).collect::<Vec<_>>().join("\n");
+        let mut updated_lines: Vec<String> = (1..=20).map(|i| format!("line {i}")).collect();
+        updated_lines[2] = "changed 3".to_string();
+        updated_lines[17] = "changed 18".to_string();
+        let updated = updated_lines.join("\n");
+
+        let hunks = make_patch(&original, &updated);
+        assert!(
+            hunks.len() >= 2,
+            "distant changes should produce separate hunks: got {}",
+            hunks.len()
+        );
+    }
+
+    #[test]
+    fn make_patch_identical_files_produces_no_hunks() {
+        use super::make_patch;
+
+        let content = "same\ncontent\nhere\n";
+        let hunks = make_patch(content, content);
+        assert!(hunks.is_empty(), "identical files should produce no hunks");
     }
 }

@@ -1,5 +1,7 @@
 use std::collections::BTreeMap;
 use std::fmt::{Display, Formatter};
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::Arc;
 
 use serde_json::{Map, Value};
 use telemetry::SessionTracer;
@@ -18,6 +20,68 @@ use crate::usage::{TokenUsage, UsageTracker};
 
 const DEFAULT_AUTO_COMPACTION_INPUT_TOKENS_THRESHOLD: u32 = 100_000;
 const AUTO_COMPACTION_THRESHOLD_ENV_VAR: &str = "CLAUDE_CODE_AUTO_COMPACT_INPUT_TOKENS";
+
+/// A shared, thread-safe iteration budget for bounding total LLM turns across
+/// a parent runtime and all spawned sub-agents (e.g. in Syndicate mode).
+///
+/// When multiple [`ConversationRuntime`] instances share the same budget, each
+/// turn consumed by any runtime decrements the same counter. Once the budget
+/// reaches zero, all runtimes using it will refuse to start new iterations.
+#[derive(Debug, Clone)]
+pub struct IterationBudget {
+    remaining: Arc<AtomicUsize>,
+}
+
+impl IterationBudget {
+    /// Create a new budget with `total` iterations.
+    #[must_use]
+    pub fn new(total: usize) -> Self {
+        Self {
+            remaining: Arc::new(AtomicUsize::new(total)),
+        }
+    }
+
+    /// Create an unlimited budget (no enforcement).
+    #[must_use]
+    pub fn unlimited() -> Self {
+        Self::new(usize::MAX)
+    }
+
+    /// Try to consume one iteration. Returns `true` if budget available,
+    /// `false` if exhausted.
+    #[must_use]
+    pub fn try_consume(&self) -> bool {
+        loop {
+            let current = self.remaining.load(Ordering::Acquire);
+            if current == 0 {
+                return false;
+            }
+            // Don't bother decrementing MAX — treat it as infinite.
+            if current == usize::MAX {
+                return true;
+            }
+            if self
+                .remaining
+                .compare_exchange_weak(current, current - 1, Ordering::AcqRel, Ordering::Relaxed)
+                .is_ok()
+            {
+                return true;
+            }
+        }
+    }
+
+    /// Returns the remaining iteration count.
+    #[must_use]
+    pub fn remaining(&self) -> usize {
+        self.remaining.load(Ordering::Relaxed)
+    }
+}
+
+impl Default for IterationBudget {
+    fn default() -> Self {
+        Self::unlimited()
+    }
+}
 
 /// Fully assembled request payload sent to the upstream model client.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -56,8 +120,14 @@ pub trait ApiClient {
 }
 
 /// Trait implemented by tool dispatchers that execute model-requested tools.
-pub trait ToolExecutor {
-    fn execute(&mut self, tool_name: &str, input: &str) -> Result<String, ToolError>;
+pub trait ToolExecutor: Send + Sync {
+    fn execute(&self, tool_name: &str, input: &str) -> Result<String, ToolError>;
+
+    /// Hint whether a given tool is read-only (no side effects) and can safely
+    /// run concurrently with other read-only tools. Default: `false`.
+    fn is_read_only(&self, _tool_name: &str) -> bool {
+        false
+    }
 }
 
 /// Error returned when a tool invocation fails locally.
@@ -133,6 +203,7 @@ pub struct ConversationRuntime<C, T> {
     permission_policy: PermissionPolicy,
     system_prompt: Vec<String>,
     max_iterations: usize,
+    iteration_budget: IterationBudget,
     usage_tracker: UsageTracker,
     hook_runner: HookRunner,
     auto_compaction_input_tokens_threshold: u32,
@@ -183,6 +254,7 @@ where
             permission_policy,
             system_prompt,
             max_iterations: usize::MAX,
+            iteration_budget: IterationBudget::default(),
             usage_tracker,
             hook_runner: HookRunner::from_feature_config(feature_config),
             auto_compaction_input_tokens_threshold: auto_compaction_threshold_from_env(),
@@ -196,6 +268,14 @@ where
     #[must_use]
     pub fn with_max_iterations(mut self, max_iterations: usize) -> Self {
         self.max_iterations = max_iterations;
+        self
+    }
+
+    /// Attach a shared iteration budget that bounds total turns across this
+    /// runtime and any other runtimes sharing the same [`IterationBudget`].
+    #[must_use]
+    pub fn with_iteration_budget(mut self, budget: IterationBudget) -> Self {
+        self.iteration_budget = budget;
         self
     }
 
@@ -333,6 +413,13 @@ where
                 self.record_turn_failed(iterations, &error);
                 return Err(error);
             }
+            if !self.iteration_budget.try_consume() {
+                let error = RuntimeError::new(
+                    "shared iteration budget exhausted (parent + sub-agents exceeded the total allowed turns)",
+                );
+                self.record_turn_failed(iterations, &error);
+                return Err(error);
+            }
 
             let mut effective_system_prompt = self.system_prompt.clone();
             if let Some(ref ctx) = auto_context {
@@ -387,105 +474,27 @@ where
                 break;
             }
 
-            for (tool_use_id, tool_name, input) in pending_tool_uses {
-                let pre_hook_result = self.run_pre_tool_use_hook(&tool_name, &input);
-                let effective_input = pre_hook_result
-                    .updated_input()
-                    .map_or_else(|| input.clone(), ToOwned::to_owned);
-                let permission_context = PermissionContext::new(
-                    pre_hook_result.permission_override(),
-                    pre_hook_result.permission_reason().map(ToOwned::to_owned),
-                );
+            // Determine if all tools in this batch are read-only so we can
+            // execute them concurrently via std::thread::scope.
+            let all_read_only = pending_tool_uses.len() > 1
+                && pending_tool_uses
+                    .iter()
+                    .all(|(_, name, _)| self.tool_executor.is_read_only(name));
 
-                let permission_outcome = if pre_hook_result.is_cancelled() {
-                    PermissionOutcome::Deny {
-                        reason: format_hook_message(
-                            &pre_hook_result,
-                            &format!("PreToolUse hook cancelled tool `{tool_name}`"),
-                        ),
-                    }
-                } else if pre_hook_result.is_failed() {
-                    PermissionOutcome::Deny {
-                        reason: format_hook_message(
-                            &pre_hook_result,
-                            &format!("PreToolUse hook failed for tool `{tool_name}`"),
-                        ),
-                    }
-                } else if pre_hook_result.is_denied() {
-                    PermissionOutcome::Deny {
-                        reason: format_hook_message(
-                            &pre_hook_result,
-                            &format!("PreToolUse hook denied tool `{tool_name}`"),
-                        ),
-                    }
-                } else if let Some(prompt) = prompter.as_mut() {
-                    self.permission_policy.authorize_with_context(
-                        &tool_name,
-                        &effective_input,
-                        &permission_context,
-                        Some(*prompt),
-                    )
-                } else {
-                    self.permission_policy.authorize_with_context(
-                        &tool_name,
-                        &effective_input,
-                        &permission_context,
-                        None,
-                    )
-                };
-
-                let result_message = match permission_outcome {
-                    PermissionOutcome::Allow => {
-                        self.record_tool_started(iterations, &tool_name);
-                        let (mut output, mut is_error) =
-                            match self.tool_executor.execute(&tool_name, &effective_input) {
-                                Ok(output) => (output, false),
-                                Err(error) => (error.to_string(), true),
-                            };
-                        output = merge_hook_feedback(pre_hook_result.messages(), output, false);
-
-                        let post_hook_result = if is_error {
-                            self.run_post_tool_use_failure_hook(
-                                &tool_name,
-                                &effective_input,
-                                &output,
-                            )
-                        } else {
-                            self.run_post_tool_use_hook(
-                                &tool_name,
-                                &effective_input,
-                                &output,
-                                false,
-                            )
-                        };
-                        if post_hook_result.is_denied()
-                            || post_hook_result.is_failed()
-                            || post_hook_result.is_cancelled()
-                        {
-                            is_error = true;
-                        }
-                        output = merge_hook_feedback(
-                            post_hook_result.messages(),
-                            output,
-                            post_hook_result.is_denied()
-                                || post_hook_result.is_failed()
-                                || post_hook_result.is_cancelled(),
-                        );
-
-                        ConversationMessage::tool_result(tool_use_id, tool_name, output, is_error)
-                    }
-                    PermissionOutcome::Deny { reason } => ConversationMessage::tool_result(
-                        tool_use_id,
-                        tool_name,
-                        merge_hook_feedback(pre_hook_result.messages(), reason, true),
-                        true,
-                    ),
-                };
-                self.session
-                    .push_message(result_message.clone())
-                    .map_err(|error| RuntimeError::new(error.to_string()))?;
-                self.record_tool_finished(iterations, &result_message);
-                tool_results.push(result_message);
+            if all_read_only {
+                self.execute_tools_parallel(
+                    &pending_tool_uses,
+                    iterations,
+                    &mut tool_results,
+                    &mut prompter,
+                )?;
+            } else {
+                self.execute_tools_sequential(
+                    &pending_tool_uses,
+                    iterations,
+                    &mut tool_results,
+                    &mut prompter,
+                )?;
             }
         }
 
@@ -502,6 +511,278 @@ where
         self.record_turn_completed(&summary);
 
         Ok(summary)
+    }
+
+    /// Execute pending tool calls one at a time.
+    fn execute_tools_sequential(
+        &mut self,
+        pending: &[(String, String, String)],
+        iterations: usize,
+        tool_results: &mut Vec<ConversationMessage>,
+        prompter: &mut Option<&mut dyn PermissionPrompter>,
+    ) -> Result<(), RuntimeError> {
+        for (tool_use_id, tool_name, input) in pending {
+            let pre_hook_result = self.run_pre_tool_use_hook(tool_name, input);
+            let effective_input = pre_hook_result
+                .updated_input()
+                .map_or_else(|| input.clone(), ToOwned::to_owned);
+            let permission_context = PermissionContext::new(
+                pre_hook_result.permission_override(),
+                pre_hook_result.permission_reason().map(ToOwned::to_owned),
+            );
+
+            let permission_outcome = if pre_hook_result.is_cancelled() {
+                PermissionOutcome::Deny {
+                    reason: format_hook_message(
+                        &pre_hook_result,
+                        &format!("PreToolUse hook cancelled tool `{tool_name}`"),
+                    ),
+                }
+            } else if pre_hook_result.is_failed() {
+                PermissionOutcome::Deny {
+                    reason: format_hook_message(
+                        &pre_hook_result,
+                        &format!("PreToolUse hook failed for tool `{tool_name}`"),
+                    ),
+                }
+            } else if pre_hook_result.is_denied() {
+                PermissionOutcome::Deny {
+                    reason: format_hook_message(
+                        &pre_hook_result,
+                        &format!("PreToolUse hook denied tool `{tool_name}`"),
+                    ),
+                }
+            } else if let Some(prompt) = prompter.as_mut() {
+                self.permission_policy.authorize_with_context(
+                    tool_name,
+                    &effective_input,
+                    &permission_context,
+                    Some(*prompt),
+                )
+            } else {
+                self.permission_policy.authorize_with_context(
+                    tool_name,
+                    &effective_input,
+                    &permission_context,
+                    None,
+                )
+            };
+
+            let result_message = match permission_outcome {
+                PermissionOutcome::Allow => {
+                    self.record_tool_started(iterations, tool_name);
+                    let (mut output, mut is_error) =
+                        match self.tool_executor.execute(tool_name, &effective_input) {
+                            Ok(output) => (output, false),
+                            Err(error) => (error.to_string(), true),
+                        };
+                    output = merge_hook_feedback(pre_hook_result.messages(), output, false);
+
+                    let post_hook_result = if is_error {
+                        self.run_post_tool_use_failure_hook(tool_name, &effective_input, &output)
+                    } else {
+                        self.run_post_tool_use_hook(tool_name, &effective_input, &output, false)
+                    };
+                    if post_hook_result.is_denied()
+                        || post_hook_result.is_failed()
+                        || post_hook_result.is_cancelled()
+                    {
+                        is_error = true;
+                    }
+                    output = merge_hook_feedback(
+                        post_hook_result.messages(),
+                        output,
+                        post_hook_result.is_denied()
+                            || post_hook_result.is_failed()
+                            || post_hook_result.is_cancelled(),
+                    );
+
+                    ConversationMessage::tool_result(tool_use_id, tool_name, output, is_error)
+                }
+                PermissionOutcome::Deny { reason } => ConversationMessage::tool_result(
+                    tool_use_id,
+                    tool_name,
+                    merge_hook_feedback(pre_hook_result.messages(), reason, true),
+                    true,
+                ),
+            };
+            self.session
+                .push_message(result_message.clone())
+                .map_err(|error| RuntimeError::new(error.to_string()))?;
+            self.record_tool_finished(iterations, &result_message);
+            tool_results.push(result_message);
+        }
+        Ok(())
+    }
+
+    /// Execute a batch of **read-only** tools concurrently. Hooks and permission
+    /// checks run sequentially first; then all tool executions run in parallel
+    /// via [`std::thread::scope`], and results are committed to the session in
+    /// the original order.
+    #[allow(clippy::too_many_lines)]
+    fn execute_tools_parallel(
+        &mut self,
+        pending: &[(String, String, String)],
+        iterations: usize,
+        tool_results: &mut Vec<ConversationMessage>,
+        prompter: &mut Option<&mut dyn PermissionPrompter>,
+    ) -> Result<(), RuntimeError> {
+        // Phase 1: Run hooks and permission checks sequentially to build
+        // a list of approved tool calls.
+        struct ApprovedCall {
+            tool_use_id: String,
+            tool_name: String,
+            effective_input: String,
+            pre_hook_messages: Vec<String>,
+        }
+        let mut approved: Vec<ApprovedCall> = Vec::new();
+        let mut denied_results: Vec<(usize, ConversationMessage)> = Vec::new();
+
+        for (idx, (tool_use_id, tool_name, input)) in pending.iter().enumerate() {
+            let pre_hook_result = self.run_pre_tool_use_hook(tool_name, input);
+            let effective_input = pre_hook_result
+                .updated_input()
+                .map_or_else(|| input.clone(), ToOwned::to_owned);
+            let permission_context = PermissionContext::new(
+                pre_hook_result.permission_override(),
+                pre_hook_result.permission_reason().map(ToOwned::to_owned),
+            );
+
+            let denied = pre_hook_result.is_cancelled()
+                || pre_hook_result.is_failed()
+                || pre_hook_result.is_denied();
+            let outcome = if denied {
+                PermissionOutcome::Deny {
+                    reason: format_hook_message(
+                        &pre_hook_result,
+                        &format!("PreToolUse hook blocked tool `{tool_name}`"),
+                    ),
+                }
+            } else if let Some(prompt) = prompter.as_mut() {
+                self.permission_policy.authorize_with_context(
+                    tool_name,
+                    &effective_input,
+                    &permission_context,
+                    Some(*prompt),
+                )
+            } else {
+                self.permission_policy.authorize_with_context(
+                    tool_name,
+                    &effective_input,
+                    &permission_context,
+                    None,
+                )
+            };
+
+            match outcome {
+                PermissionOutcome::Allow => {
+                    self.record_tool_started(iterations, tool_name);
+                    approved.push(ApprovedCall {
+                        tool_use_id: tool_use_id.clone(),
+                        tool_name: tool_name.clone(),
+                        effective_input,
+                        pre_hook_messages: pre_hook_result
+                            .messages()
+                            .iter()
+                            .map(ToString::to_string)
+                            .collect(),
+                    });
+                }
+                PermissionOutcome::Deny { reason } => {
+                    denied_results.push((
+                        idx,
+                        ConversationMessage::tool_result(
+                            tool_use_id,
+                            tool_name,
+                            merge_hook_feedback(pre_hook_result.messages(), reason, true),
+                            true,
+                        ),
+                    ));
+                }
+            }
+        }
+
+        // Phase 2: Execute approved calls concurrently.
+        let executor = &self.tool_executor;
+        let parallel_results: Vec<(String, String, String, bool, Vec<String>)> =
+            std::thread::scope(|scope| {
+                let handles: Vec<_> = approved
+                    .iter()
+                    .map(|call| {
+                        scope.spawn(|| {
+                            let result = executor.execute(&call.tool_name, &call.effective_input);
+                            let (output, is_error) = match result {
+                                Ok(output) => (output, false),
+                                Err(error) => (error.to_string(), true),
+                            };
+                            (
+                                call.tool_use_id.clone(),
+                                call.tool_name.clone(),
+                                output,
+                                is_error,
+                                call.pre_hook_messages.clone(),
+                            )
+                        })
+                    })
+                    .collect();
+                handles
+                    .into_iter()
+                    .map(|handle| handle.join().expect("tool thread should not panic"))
+                    .collect()
+            });
+
+        // Phase 3: Run post-hooks sequentially (they may have side effects)
+        // and commit results in order, interleaving denied results.
+        let mut approved_idx = 0;
+        let mut denied_idx = 0;
+        for idx in 0..pending.len() {
+            let result_message = if denied_idx < denied_results.len()
+                && denied_results[denied_idx].0 == idx
+            {
+                let msg = denied_results[denied_idx].1.clone();
+                denied_idx += 1;
+                msg
+            } else if approved_idx < parallel_results.len() {
+                let (ref tool_use_id, ref tool_name, ref raw_output, is_error, ref pre_msgs) =
+                    parallel_results[approved_idx];
+                approved_idx += 1;
+
+                let mut output =
+                    merge_hook_feedback(pre_msgs, raw_output.clone(), false);
+                let mut final_error = is_error;
+
+                let post_hook_result = if final_error {
+                    self.run_post_tool_use_failure_hook(tool_name, "", &output)
+                } else {
+                    self.run_post_tool_use_hook(tool_name, "", &output, false)
+                };
+                if post_hook_result.is_denied()
+                    || post_hook_result.is_failed()
+                    || post_hook_result.is_cancelled()
+                {
+                    final_error = true;
+                }
+                output = merge_hook_feedback(
+                    post_hook_result.messages(),
+                    output,
+                    post_hook_result.is_denied()
+                        || post_hook_result.is_failed()
+                        || post_hook_result.is_cancelled(),
+                );
+
+                ConversationMessage::tool_result(tool_use_id, tool_name, output, final_error)
+            } else {
+                continue;
+            };
+
+            self.session
+                .push_message(result_message.clone())
+                .map_err(|error| RuntimeError::new(error.to_string()))?;
+            self.record_tool_finished(iterations, &result_message);
+            tool_results.push(result_message);
+        }
+
+        Ok(())
     }
 
     #[must_use]
@@ -805,12 +1086,12 @@ fn merge_hook_feedback(messages: &[String], output: String, is_error: bool) -> S
     sections.join("\n\n")
 }
 
-type ToolHandler = Box<dyn FnMut(&str) -> Result<String, ToolError>>;
+type StaticToolHandler = Box<dyn Fn(&str) -> Result<String, ToolError> + Send + Sync>;
 
 /// Simple in-memory tool executor for tests and lightweight integrations.
 #[derive(Default)]
 pub struct StaticToolExecutor {
-    handlers: BTreeMap<String, ToolHandler>,
+    handlers: BTreeMap<String, StaticToolHandler>,
 }
 
 impl StaticToolExecutor {
@@ -823,7 +1104,7 @@ impl StaticToolExecutor {
     pub fn register(
         mut self,
         tool_name: impl Into<String>,
-        handler: impl FnMut(&str) -> Result<String, ToolError> + 'static,
+        handler: impl Fn(&str) -> Result<String, ToolError> + Send + Sync + 'static,
     ) -> Self {
         self.handlers.insert(tool_name.into(), Box::new(handler));
         self
@@ -831,9 +1112,9 @@ impl StaticToolExecutor {
 }
 
 impl ToolExecutor for StaticToolExecutor {
-    fn execute(&mut self, tool_name: &str, input: &str) -> Result<String, ToolError> {
+    fn execute(&self, tool_name: &str, input: &str) -> Result<String, ToolError> {
         self.handlers
-            .get_mut(tool_name)
+            .get(tool_name)
             .ok_or_else(|| ToolError::new(format!("unknown tool: {tool_name}")))?(input)
     }
 }
@@ -1662,7 +1943,7 @@ mod tests {
     #[test]
     fn static_tool_executor_rejects_unknown_tools() {
         // given
-        let mut executor = StaticToolExecutor::new();
+        let executor = StaticToolExecutor::new();
 
         // when
         let error = executor
@@ -1822,5 +2103,34 @@ mod tests {
         let prompt = captured.lock().unwrap().take().unwrap();
         // No <codebase_context> should be appended since the index is not ready.
         assert_eq!(prompt, vec!["base".to_string()]);
+    }
+
+    #[test]
+    fn iteration_budget_unlimited_always_succeeds() {
+        let budget = super::IterationBudget::unlimited();
+        for _ in 0..1000 {
+            assert!(budget.try_consume());
+        }
+    }
+
+    #[test]
+    fn iteration_budget_counts_down() {
+        let budget = super::IterationBudget::new(3);
+        assert_eq!(budget.remaining(), 3);
+        assert!(budget.try_consume());
+        assert!(budget.try_consume());
+        assert!(budget.try_consume());
+        assert!(!budget.try_consume(), "should be exhausted after 3 uses");
+        assert_eq!(budget.remaining(), 0);
+    }
+
+    #[test]
+    fn iteration_budget_shared_across_clones() {
+        let budget = super::IterationBudget::new(2);
+        let budget2 = budget.clone();
+        assert!(budget.try_consume());
+        assert!(budget2.try_consume());
+        assert!(!budget.try_consume(), "shared budget should be exhausted");
+        assert!(!budget2.try_consume(), "clone sees the same exhaustion");
     }
 }
