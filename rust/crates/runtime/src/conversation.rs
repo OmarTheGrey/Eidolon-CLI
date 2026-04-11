@@ -1,5 +1,7 @@
 use std::collections::BTreeMap;
 use std::fmt::{Display, Formatter};
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::Arc;
 
 use serde_json::{Map, Value};
 use telemetry::SessionTracer;
@@ -18,6 +20,68 @@ use crate::usage::{TokenUsage, UsageTracker};
 
 const DEFAULT_AUTO_COMPACTION_INPUT_TOKENS_THRESHOLD: u32 = 100_000;
 const AUTO_COMPACTION_THRESHOLD_ENV_VAR: &str = "CLAUDE_CODE_AUTO_COMPACT_INPUT_TOKENS";
+
+/// A shared, thread-safe iteration budget for bounding total LLM turns across
+/// a parent runtime and all spawned sub-agents (e.g. in Syndicate mode).
+///
+/// When multiple [`ConversationRuntime`] instances share the same budget, each
+/// turn consumed by any runtime decrements the same counter. Once the budget
+/// reaches zero, all runtimes using it will refuse to start new iterations.
+#[derive(Debug, Clone)]
+pub struct IterationBudget {
+    remaining: Arc<AtomicUsize>,
+}
+
+impl IterationBudget {
+    /// Create a new budget with `total` iterations.
+    #[must_use]
+    pub fn new(total: usize) -> Self {
+        Self {
+            remaining: Arc::new(AtomicUsize::new(total)),
+        }
+    }
+
+    /// Create an unlimited budget (no enforcement).
+    #[must_use]
+    pub fn unlimited() -> Self {
+        Self::new(usize::MAX)
+    }
+
+    /// Try to consume one iteration. Returns `true` if budget available,
+    /// `false` if exhausted.
+    #[must_use]
+    pub fn try_consume(&self) -> bool {
+        loop {
+            let current = self.remaining.load(Ordering::Acquire);
+            if current == 0 {
+                return false;
+            }
+            // Don't bother decrementing MAX — treat it as infinite.
+            if current == usize::MAX {
+                return true;
+            }
+            if self
+                .remaining
+                .compare_exchange_weak(current, current - 1, Ordering::AcqRel, Ordering::Relaxed)
+                .is_ok()
+            {
+                return true;
+            }
+        }
+    }
+
+    /// Returns the remaining iteration count.
+    #[must_use]
+    pub fn remaining(&self) -> usize {
+        self.remaining.load(Ordering::Relaxed)
+    }
+}
+
+impl Default for IterationBudget {
+    fn default() -> Self {
+        Self::unlimited()
+    }
+}
 
 /// Fully assembled request payload sent to the upstream model client.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -133,6 +197,7 @@ pub struct ConversationRuntime<C, T> {
     permission_policy: PermissionPolicy,
     system_prompt: Vec<String>,
     max_iterations: usize,
+    iteration_budget: IterationBudget,
     usage_tracker: UsageTracker,
     hook_runner: HookRunner,
     auto_compaction_input_tokens_threshold: u32,
@@ -183,6 +248,7 @@ where
             permission_policy,
             system_prompt,
             max_iterations: usize::MAX,
+            iteration_budget: IterationBudget::default(),
             usage_tracker,
             hook_runner: HookRunner::from_feature_config(feature_config),
             auto_compaction_input_tokens_threshold: auto_compaction_threshold_from_env(),
@@ -196,6 +262,14 @@ where
     #[must_use]
     pub fn with_max_iterations(mut self, max_iterations: usize) -> Self {
         self.max_iterations = max_iterations;
+        self
+    }
+
+    /// Attach a shared iteration budget that bounds total turns across this
+    /// runtime and any other runtimes sharing the same [`IterationBudget`].
+    #[must_use]
+    pub fn with_iteration_budget(mut self, budget: IterationBudget) -> Self {
+        self.iteration_budget = budget;
         self
     }
 
@@ -329,6 +403,13 @@ where
             if iterations > self.max_iterations {
                 let error = RuntimeError::new(
                     "conversation loop exceeded the maximum number of iterations",
+                );
+                self.record_turn_failed(iterations, &error);
+                return Err(error);
+            }
+            if !self.iteration_budget.try_consume() {
+                let error = RuntimeError::new(
+                    "shared iteration budget exhausted (parent + sub-agents exceeded the total allowed turns)",
                 );
                 self.record_turn_failed(iterations, &error);
                 return Err(error);
@@ -1822,5 +1903,34 @@ mod tests {
         let prompt = captured.lock().unwrap().take().unwrap();
         // No <codebase_context> should be appended since the index is not ready.
         assert_eq!(prompt, vec!["base".to_string()]);
+    }
+
+    #[test]
+    fn iteration_budget_unlimited_always_succeeds() {
+        let budget = super::IterationBudget::unlimited();
+        for _ in 0..1000 {
+            assert!(budget.try_consume());
+        }
+    }
+
+    #[test]
+    fn iteration_budget_counts_down() {
+        let budget = super::IterationBudget::new(3);
+        assert_eq!(budget.remaining(), 3);
+        assert!(budget.try_consume());
+        assert!(budget.try_consume());
+        assert!(budget.try_consume());
+        assert!(!budget.try_consume(), "should be exhausted after 3 uses");
+        assert_eq!(budget.remaining(), 0);
+    }
+
+    #[test]
+    fn iteration_budget_shared_across_clones() {
+        let budget = super::IterationBudget::new(2);
+        let budget2 = budget.clone();
+        assert!(budget.try_consume());
+        assert!(budget2.try_consume());
+        assert!(!budget.try_consume(), "shared budget should be exhausted");
+        assert!(!budget2.try_consume(), "clone sees the same exhaustion");
     }
 }

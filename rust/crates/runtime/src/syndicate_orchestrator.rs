@@ -11,6 +11,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use serde::{Deserialize, Serialize};
 
+use crate::conversation::IterationBudget;
 use crate::syndicate_collection::{find_collection, SyndicateAgentDef, SyndicateCollection};
 use crate::syndicate_memory::SyndicateMemory;
 
@@ -77,6 +78,9 @@ pub struct SyndicateRunResult {
     pub success: bool,
 }
 
+/// Default total iteration budget shared across all syndicate agents.
+const DEFAULT_SYNDICATE_ITERATION_BUDGET: usize = 200;
+
 /// The orchestrator that manages a syndicate's lifecycle.
 #[derive(Debug)]
 pub struct SyndicateOrchestrator {
@@ -88,6 +92,8 @@ pub struct SyndicateOrchestrator {
     pub task: String,
     pub model: Option<String>,
     pub started_at: u64,
+    /// Shared budget that all spawned agent runtimes should reference.
+    pub iteration_budget: IterationBudget,
 }
 
 impl SyndicateOrchestrator {
@@ -135,6 +141,7 @@ impl SyndicateOrchestrator {
             task: config.task,
             model: config.model,
             started_at: now_ms(),
+            iteration_budget: IterationBudget::new(DEFAULT_SYNDICATE_ITERATION_BUDGET),
         })
     }
 
