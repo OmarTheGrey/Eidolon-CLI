@@ -11,6 +11,7 @@
 mod init;
 mod input;
 mod render;
+pub mod skin;
 
 use std::collections::BTreeSet;
 use std::env;
