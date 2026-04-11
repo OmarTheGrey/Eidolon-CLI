@@ -28,7 +28,7 @@ Built following the **Regula Framework** — a set of agentic design patterns fo
 
 ### Agent Runtime Core
 - **Interactive REPL** with streaming markdown rendering, syntax highlighting, and slash commands
-- **Tool execution** — bash, file read/write/edit, glob, grep, with permission enforcement per call
+- **Tool execution** — bash, file read/write/edit, glob, grep, with permission enforcement per call and background process tracking
 - **Concurrent read-only tool dispatch** — when the model emits multiple read-only tool calls, they execute in parallel via scoped threads
 - **Inline diff previews** — file edits and writes show proper unified diffs in the terminal with hunk headers and colored context
 - **Session persistence** — JSONL-based conversation history with token-aware automatic compaction
