@@ -43,6 +43,10 @@ The binary crate (`eidolon-cli`) sits at the top and depends on six library crat
 rust/
 ├── Cargo.toml                  # Workspace manifest
 └── crates/
+    ├── api-server/             # OpenAI-compatible HTTP server (axum)
+    │   └── src/
+    │       ├── lib.rs          # Server setup, handlers, ProviderBridge
+    │       └── types.rs        # OpenAI-compatible request/response types
     ├── eidolon-cli/            # Binary — CLI entry, REPL, TUI
     │   └── src/
     │       ├── main.rs         # CLI parsing, session mgmt, conversation loop

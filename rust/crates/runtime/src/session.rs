@@ -145,6 +145,22 @@ impl Session {
         }
     }
 
+    /// Create a session pre-populated with existing messages (no persistence).
+    #[must_use]
+    pub fn from_messages(messages: Vec<ConversationMessage>) -> Self {
+        let now = current_time_millis();
+        Self {
+            version: SESSION_VERSION,
+            session_id: generate_session_id(),
+            created_at_ms: now,
+            updated_at_ms: now,
+            messages,
+            compaction: None,
+            fork: None,
+            persistence: None,
+        }
+    }
+
     #[must_use]
     pub fn with_persistence_path(mut self, path: impl Into<PathBuf>) -> Self {
         self.persistence = Some(SessionPersistence { path: path.into() });

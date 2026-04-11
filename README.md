@@ -37,6 +37,7 @@ Built following the **Regula Framework** — a set of agentic design patterns fo
 - **Provider fallback chains** — ordered failover across multiple providers or API keys on overload (529), rate limit (429), or auth errors
 - **Smart approvals** — permission decisions are cached so the same tool pattern doesn't re-prompt within a session
 - **Profile isolation** — run multiple Eidolon instances with separate config, sessions, skills, and credentials via `EIDOLON_PROFILE`
+- **OpenAI-compatible API server** — `eidolon-cli serve` exposes `/v1/chat/completions` so any OpenAI-compatible frontend (Open WebUI, LobeChat, LibreChat, etc.) can use Eidolon as a backend
 - **JSON output mode** — every command supports `--output-format json` for programmatic consumption
 - **OAuth & API key auth** — built-in PKCE OAuth flow or simple environment variable auth
 
@@ -191,6 +192,7 @@ rust/                    # Rust workspace (9 crates)
 │   ├── runtime/         # Core engine — config, sessions, MCP, permissions, indexer
 │   ├── commands/        # Slash command registry
 │   ├── tools/           # Tool implementations (bash, file ops, agents, search)
+│   ├── api-server/      # OpenAI-compatible HTTP server (axum)
 │   ├── indexing/        # Semantic indexing (any BERT model via Candle, chunking, search, cache)
 │   ├── plugins/         # Plugin system and hooks
 │   ├── telemetry/       # Tracing and analytics
@@ -219,6 +221,7 @@ Eidolon is built on top of excellent open-source Rust crates:
 | [candle](https://crates.io/crates/candle-core) | Pure-Rust ML inference (BERT embeddings) |
 | [tokenizers](https://crates.io/crates/tokenizers) | HuggingFace tokenizer (WordPiece) |
 | [hf-hub](https://crates.io/crates/hf-hub) | HuggingFace model downloads |
+| [axum](https://crates.io/crates/axum) | HTTP server framework for API server |
 | [similar](https://crates.io/crates/similar) | Unified diff generation for inline previews |
 | [rusqlite](https://crates.io/crates/rusqlite) | SQLite with FTS5 for cross-session search |
 

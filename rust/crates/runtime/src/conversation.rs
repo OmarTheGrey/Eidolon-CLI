@@ -815,6 +815,13 @@ where
         self.session
     }
 
+    /// Clone the current session state (for persistence without consuming
+    /// the runtime). Only copies the message history, not the file handle.
+    #[must_use]
+    pub fn snapshot_session(&self) -> Session {
+        Session::from_messages(self.session.messages.clone())
+    }
+
     fn maybe_auto_compact(&mut self) -> Option<AutoCompactionEvent> {
         if self.usage_tracker.cumulative_usage().input_tokens
             < self.auto_compaction_input_tokens_threshold
