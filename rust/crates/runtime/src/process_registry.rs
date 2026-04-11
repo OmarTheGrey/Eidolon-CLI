@@ -219,6 +219,13 @@ impl ProcessRegistry {
         }
     }
 
+    /// Returns the output directory path.
+    #[must_use]
+    pub fn output_dir(&self) -> PathBuf {
+        let inner = self.inner.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        inner.output_dir.clone()
+    }
+
     /// Number of currently running processes.
     pub fn running_count(&self) -> usize {
         let inner = self.inner.lock().unwrap_or_else(std::sync::PoisonError::into_inner);

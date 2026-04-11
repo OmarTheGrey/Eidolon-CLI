@@ -55,7 +55,7 @@ mod usage;
 pub mod worker_boot;
 
 pub use approval_cache::{ApprovalCache, ApprovalEntry, ApprovalScope};
-pub use bash::{execute_bash, BashCommandInput, BashCommandOutput};
+pub use bash::{execute_bash, execute_bash_with_registry, BashCommandInput, BashCommandOutput};
 pub use bootstrap::{BootstrapPhase, BootstrapPlan};
 pub use branch_lock::{detect_branch_lock_collisions, BranchLockCollision, BranchLockIntent};
 pub use compact::{
