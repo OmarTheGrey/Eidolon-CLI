@@ -68,16 +68,56 @@ pub struct BashCommandOutput {
 
 /// Executes a shell command with the requested sandbox settings.
 pub fn execute_bash(input: BashCommandInput) -> io::Result<BashCommandOutput> {
+    execute_bash_with_registry(input, None)
+}
+
+/// Executes a shell command, optionally registering background processes in the
+/// given [`ProcessRegistry`] so they can be polled, read, and killed later.
+pub fn execute_bash_with_registry(
+    input: BashCommandInput,
+    registry: Option<&crate::process_registry::ProcessRegistry>,
+) -> io::Result<BashCommandOutput> {
     let cwd = env::current_dir()?;
     let sandbox_status = sandbox_status_for_input(&input, &cwd);
 
     if input.run_in_background.unwrap_or(false) {
-        let mut child = prepare_command(&input.command, &cwd, &sandbox_status, false);
-        let child = child
+        let output_file = registry.map(|r| {
+            // Pre-create the output log path via a temp ID. The real ID is
+            // assigned by the registry after spawn.
+            let dir = r.output_dir();
+            let _ = std::fs::create_dir_all(&dir);
+            dir.join("pending.log")
+        });
+
+        let stdout_target = output_file
+            .as_ref()
+            .and_then(|path| std::fs::File::create(path).ok())
+            .map_or(Stdio::null(), |f| Stdio::from(f.try_clone().unwrap_or(f)));
+        let stderr_target = output_file
+            .as_ref()
+            .and_then(|path| std::fs::OpenOptions::new().append(true).open(path).ok())
+            .map_or(Stdio::null(), Stdio::from);
+
+        let mut cmd = prepare_command(&input.command, &cwd, &sandbox_status, false);
+        let child = cmd
             .stdin(Stdio::null())
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
+            .stdout(stdout_target)
+            .stderr(stderr_target)
             .spawn()?;
+
+        let task_id = if let Some(reg) = registry {
+            let id = reg.register(&input.command, child);
+            // Rename the temp log to the real ID-based name.
+            if let Some(src) = &output_file {
+                let entry = reg.status(&id);
+                if let Some(entry) = entry {
+                    let _ = std::fs::rename(src, &entry.output_path);
+                }
+            }
+            id
+        } else {
+            child.id().to_string()
+        };
 
         return Ok(BashCommandOutput {
             stdout: String::new(),
@@ -85,7 +125,7 @@ pub fn execute_bash(input: BashCommandInput) -> io::Result<BashCommandOutput> {
             raw_output_path: None,
             interrupted: false,
             is_image: None,
-            background_task_id: Some(child.id().to_string()),
+            background_task_id: Some(task_id),
             backgrounded_by_user: Some(false),
             assistant_auto_backgrounded: Some(false),
             dangerously_disable_sandbox: input.dangerously_disable_sandbox,

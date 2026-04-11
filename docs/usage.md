@@ -152,8 +152,31 @@ The agent runtime has access to a core set of built-in tools. Each tool call pas
 | `SyndicateMemorySearch` | Search syndicate shared memory entries |
 | `TodoRead` | Read the current todo list |
 | `TodoWrite` | Update the todo list |
+| `ProcessList` | List all background processes with status and command |
+| `ProcessStatus` | Get the current status of a background process by ID |
+| `ProcessOutput` | Read the stdout/stderr output log of a background process |
+| `ProcessKill` | Terminate a running background process |
 
 Additional tools come from MCP servers configured in your project — they appear alongside built-in tools and go through the same permission and hook pipeline.
+
+## Background Processes
+
+The `bash` tool supports `"run_in_background": true` for long-running commands like builds, test suites, or dev servers. When a background process is started:
+
+1. The command runs detached — the conversation continues immediately
+2. stdout/stderr are captured to a log file for later reading
+3. The process is tracked in a registry with a unique ID (e.g. `bg-1`)
+
+Use the process management tools to interact:
+
+```
+ProcessList        → see all running and finished processes
+ProcessStatus(id)  → check if a specific process is done
+ProcessOutput(id)  → read the captured output
+ProcessKill(id)    → terminate a running process
+```
+
+This enables workflows like: kick off `cargo build --release`, continue reviewing code, then check the build result when ready.
 
 ## Semantic Search
 
