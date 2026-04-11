@@ -24,9 +24,10 @@ Eidolon's architecture optimizes for three properties:
 │ registry │ bash/file │ lifecycle  │ clients  │ analytics     │
 ├──────────┴───────────┴────────────┴──────────┴───────────────┤
 │                         runtime                              │
-│  config · sessions · permissions · MCP · OAuth · prompts     │
+│  config · sessions · permissions · MCP client/server · OAuth │
 │  conversation loop · compaction · sandbox · file ops         │
-│  background indexer · IndexHandle · auto-context            │
+│  background indexer · IndexHandle · auto-context · profiles  │
+│  approval cache · session FTS5 index · iteration budget     │
 ├──────────────────────────────────────────────────────────────┤
 │                        indexing                              │
 │  file discovery · chunker · Candle BERT · cosine search     │
@@ -302,10 +303,11 @@ PR #1 added a dedicated multi-agent orchestration path:
 - A session-scoped shared memory file is initialized and exposed through `SyndicateMemory*` tools
 - Agent manifests are polled for completion/failure and rolled up into a final summary
 
-Safety constraints now applied in `tools`:
+Safety constraints:
 
 - Session-scoped spawn budget for sub-agent creation
 - Recursion guard to block Syndicate -> Syndicate spawning loops
+- **Shared iteration budget** — `IterationBudget` (atomic, `Arc`-shared) bounds total LLM turns across the parent runtime and all spawned sub-agents. Default: 200 turns per syndicate run. Prevents delegation chains from running away without requiring per-agent limits.
 
 ## Semantic Indexing
 
@@ -374,3 +376,49 @@ Key architectural properties:
 The existing indexing crate becomes the L2 ingestion layer. The permission system governs `eidolon://` path access. Syndicate agents share context through the same filesystem. Plugin hooks fire on context operations. The current architecture is designed to absorb this cleanly.
 
 See the [Roadmap](../ROADMAP.md) for the full plan.
+
+## Provider Fallback Chains
+
+`ProviderPool` in the `api` crate wraps one or more `ProviderClient` instances and tries each in order on fallback-eligible errors (429 rate limit, 529 overload, 401/403 auth). After a successful fallback, the primary provider is automatically restored on the next call.
+
+`ApiError::is_fallback_eligible()` determines which errors trigger fallback — transient provider issues do, context window and I/O errors do not.
+
+## Smart Approval Cache
+
+`ApprovalCache` in `runtime` remembers user-approved tool call patterns:
+
+- **ToolOnly** — any invocation of the named tool is pre-approved
+- **PathPrefix** — invocations whose input path starts with a given prefix
+
+Integrated into `PermissionPolicy`: the cache is checked before prompting, and approvals are recorded after the user grants permission. Optional persistence to `.eidolon/approvals.json` for cross-session memory.
+
+## Profile Isolation
+
+The `profile` module enables multiple fully isolated Eidolon instances from a single installation. Each profile has its own config, sessions, skills, and credentials under `~/.eidolon/profiles/<name>/`.
+
+Active profile is selected via `EIDOLON_PROFILE` env var. All path resolution routes through `profile::resolve_profile_home()`, so all runtime paths automatically respect the active profile.
+
+## Cross-Session Search
+
+`SessionIndex` in `runtime` maintains a sidecar SQLite database with FTS5 virtual tables alongside the existing JSONL session files. Messages are indexed by session ID, role, content, and timestamp.
+
+JSONL stays canonical (append-only, existing tooling works). The SQLite index is a write-through sidecar with WAL mode for concurrent readers.
+
+## MCP Server Mode
+
+The `mcp_server` module exposes Eidolon as a stdio MCP server, making it **bidirectional** with MCP:
+
+- **Client mode** (existing): consume external MCP tool servers
+- **Server mode** (new): expose session search and stats to other MCP clients
+
+Tools exposed: `session_search` (FTS5 full-text query) and `session_stats`. Protocol: JSON-RPC 2.0 over stdio, MCP version 2024-11-05.
+
+## Concurrent Tool Execution
+
+When the model emits a batch of 2+ tool calls that are all read-only (`read_file`, `glob_search`, `grep_search`, `semantic_search`, etc.), the conversation loop dispatches them in parallel via `std::thread::scope`:
+
+1. **Phase 1**: hooks and permission checks run sequentially (fast, may prompt)
+2. **Phase 2**: approved tool executions run in parallel threads
+3. **Phase 3**: post-hooks run sequentially, results committed in original order
+
+Batches containing any write/bash/agent tool use the sequential path. The `ToolExecutor` trait exposes `is_read_only(tool_name)` for this classification.

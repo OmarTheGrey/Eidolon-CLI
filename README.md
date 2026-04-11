@@ -29,20 +29,27 @@ Built following the **Regula Framework** — a set of agentic design patterns fo
 ### Agent Runtime Core
 - **Interactive REPL** with streaming markdown rendering, syntax highlighting, and slash commands
 - **Tool execution** — bash, file read/write/edit, glob, grep, with permission enforcement per call
+- **Concurrent read-only tool dispatch** — when the model emits multiple read-only tool calls, they execute in parallel via scoped threads
+- **Inline diff previews** — file edits and writes show proper unified diffs in the terminal with hunk headers and colored context
 - **Session persistence** — JSONL-based conversation history with token-aware automatic compaction
+- **Cross-session search** — SQLite FTS5 index enables keyword search across all past conversations
 - **Multi-provider support** — Anthropic Claude, OpenAI, and xAI Grok via a unified provider abstraction
+- **Provider fallback chains** — ordered failover across multiple providers or API keys on overload (529), rate limit (429), or auth errors
+- **Smart approvals** — permission decisions are cached so the same tool pattern doesn't re-prompt within a session
+- **Profile isolation** — run multiple Eidolon instances with separate config, sessions, skills, and credentials via `EIDOLON_PROFILE`
 - **JSON output mode** — every command supports `--output-format json` for programmatic consumption
 - **OAuth & API key auth** — built-in PKCE OAuth flow or simple environment variable auth
 
 ### Multi-Agent Orchestration
 - **Sub-agents** — spawn independent agent workers for parallel tasks with isolated contexts
 - **Syndicate mode** — define and run *any* agent team topology with session-scoped shared memory (built-in collections are demos — the framework is the point)
+- **Shared iteration budget** — parent + sub-agents share a single pool of LLM turns, preventing delegation chains from running away
 - **Shared memory coordination** — key-value writes, reads, append logs, and full-text search across all agents in a run
 
 ### Extensibility
 - **Skills system** — reusable prompt templates discovered from project directories, shareable across sessions
 - **Plugin hooks** — pre/post tool-use lifecycle hooks via shell scripts for audit, validation, or custom logic
-- **MCP integration** — connect external tool servers over stdio, WebSocket, or HTTP transports
+- **Bidirectional MCP** — consume external MCP tool servers (client) and expose Eidolon sessions as an MCP server for other tools (e.g. Claude Desktop, Cursor)
 
 ### Intelligence
 - **Semantic workspace indexing** — local Candle-based embeddings with *any* HuggingFace BERT model for codebase-aware search and automatic context injection
@@ -212,6 +219,8 @@ Eidolon is built on top of excellent open-source Rust crates:
 | [candle](https://crates.io/crates/candle-core) | Pure-Rust ML inference (BERT embeddings) |
 | [tokenizers](https://crates.io/crates/tokenizers) | HuggingFace tokenizer (WordPiece) |
 | [hf-hub](https://crates.io/crates/hf-hub) | HuggingFace model downloads |
+| [similar](https://crates.io/crates/similar) | Unified diff generation for inline previews |
+| [rusqlite](https://crates.io/crates/rusqlite) | SQLite with FTS5 for cross-session search |
 
 ## Author
 

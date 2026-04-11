@@ -298,3 +298,36 @@ echo "$result" | jq '.content'
 ```bash
 eidolon-cli --resume latest /doctor /status
 ```
+
+## Profiles
+
+Profiles let you run multiple fully isolated Eidolon instances from a single installation. Each profile gets its own config, sessions, skills, and credentials.
+
+```bash
+# Activate a profile via environment variable
+export EIDOLON_PROFILE=work
+eidolon-cli
+
+# Or use a different profile per session
+EIDOLON_PROFILE=personal eidolon-cli prompt "summarize my notes"
+```
+
+Profiles are stored under `~/.eidolon/profiles/<name>/`. Create and manage them programmatically via the `runtime::profile` module, or simply create the directory manually.
+
+## MCP Server Mode
+
+Eidolon can expose itself as a stdio MCP server, making it accessible from other MCP clients like Claude Desktop, Cursor, or VS Code.
+
+```bash
+eidolon-cli mcp-serve
+```
+
+This exposes:
+- `session_search` — full-text search across all past conversations
+- `session_stats` — indexed message count
+
+Combined with the existing MCP client support, Eidolon is now **bidirectional** with MCP — it both consumes and exposes tools through the same protocol.
+
+## Inline Diff Previews
+
+When the agent edits or overwrites a file, the terminal shows a proper unified diff preview with `@@ hunk headers`, colored additions/removals, and dimmed context lines. This gives immediate visibility into what changed without needing to inspect the file manually.
