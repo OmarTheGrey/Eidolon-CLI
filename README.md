@@ -38,6 +38,7 @@ Built following the **Regula Framework** — a set of agentic design patterns fo
 - **Smart approvals** — permission decisions are cached so the same tool pattern doesn't re-prompt within a session
 - **Profile isolation** — run multiple Eidolon instances with separate config, sessions, skills, and credentials via `EIDOLON_PROFILE`
 - **OpenAI-compatible API server** — `eidolon-cli serve` exposes `/v1/chat/completions` so any OpenAI-compatible frontend (Open WebUI, LobeChat, LibreChat, etc.) can use Eidolon as a backend
+- **Themes** — data-driven YAML theming with 4 built-in skins (default, mono, slate, ember) and user-custom skins via `~/.eidolon/skins/`
 - **JSON output mode** — every command supports `--output-format json` for programmatic consumption
 - **OAuth & API key auth** — built-in PKCE OAuth flow or simple environment variable auth
 
