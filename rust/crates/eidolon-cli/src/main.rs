@@ -6920,7 +6920,7 @@ impl CliToolExecutor {
 }
 
 impl ToolExecutor for CliToolExecutor {
-    fn execute(&mut self, tool_name: &str, input: &str) -> Result<String, ToolError> {
+    fn execute(&self, tool_name: &str, input: &str) -> Result<String, ToolError> {
         if self
             .allowed_tools
             .as_ref()
@@ -6961,6 +6961,22 @@ impl ToolExecutor for CliToolExecutor {
                 Err(error)
             }
         }
+    }
+
+    fn is_read_only(&self, tool_name: &str) -> bool {
+        matches!(
+            tool_name,
+            "read_file"
+                | "Read"
+                | "glob_search"
+                | "Glob"
+                | "grep_search"
+                | "Grep"
+                | "semantic_search"
+                | "TodoRead"
+                | "SyndicateMemoryRead"
+                | "SyndicateMemorySearch"
+        )
     }
 }
 
@@ -9269,7 +9285,7 @@ UU conflicted.rs",
         assert!(allowed.contains("mcp__alpha__echo"));
         assert!(allowed.contains("MCPTool"));
 
-        let mut executor = CliToolExecutor::new(
+        let executor = CliToolExecutor::new(
             None,
             false,
             state.tool_registry.clone(),
@@ -9367,7 +9383,7 @@ UU conflicted.rs",
         let runtime_config = loader.load().expect("runtime config should load");
         let state = build_runtime_plugin_state_with_loader(&workspace, &loader, &runtime_config)
             .expect("runtime plugin state should load");
-        let mut executor = CliToolExecutor::new(
+        let executor = CliToolExecutor::new(
             None,
             false,
             state.tool_registry.clone(),
