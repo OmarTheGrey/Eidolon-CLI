@@ -3376,8 +3376,28 @@ impl LiveCli {
             | SlashCommand::Brief
             | SlashCommand::Advisor
             | SlashCommand::Stickers
-            | SlashCommand::Insights
-            | SlashCommand::Thinkback
+            | SlashCommand::Insights => {
+                eprintln!("Command registered but not yet implemented.");
+                false
+            }
+            SlashCommand::Theme { name } => {
+                if let Some(name) = name {
+                    match global_skin_manager().set_active(&name) {
+                        Ok(()) => println!("Switched to theme: {name}"),
+                        Err(e) => eprintln!("{e}"),
+                    }
+                } else {
+                    let current = active_skin().name;
+                    let available = global_skin_manager().available_names();
+                    println!("Current theme: {current}");
+                    println!("Available: {}", available.join(", "));
+                    println!("\nSwitch with /theme <name>");
+                    println!("Custom themes: drop YAML files in ~/.eidolon/skins/");
+                }
+                false
+            }
+            #[allow(clippy::match_same_arms)] // distinct feature group
+            SlashCommand::Thinkback
             | SlashCommand::ReleaseNotes
             | SlashCommand::SecurityReview
             | SlashCommand::Keybindings
@@ -3385,7 +3405,6 @@ impl LiveCli {
             | SlashCommand::Plan { .. }
             | SlashCommand::Review { .. }
             | SlashCommand::Tasks { .. }
-            | SlashCommand::Theme { .. }
             | SlashCommand::Voice { .. }
             | SlashCommand::Usage { .. }
             | SlashCommand::Rename { .. }
@@ -6366,6 +6385,11 @@ fn slash_command_completion_candidates_with_sessions(
         "/agents help",
         "/mcp help",
         "/skills help",
+        "/theme ",
+        "/theme default",
+        "/theme mono",
+        "/theme slate",
+        "/theme ember",
     ] {
         completions.insert(candidate.to_string());
     }
