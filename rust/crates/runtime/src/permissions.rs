@@ -1,7 +1,9 @@
 use std::collections::BTreeMap;
+use std::sync::{Arc, Mutex};
 
 use serde_json::Value;
 
+use crate::approval_cache::ApprovalCache;
 use crate::config::RuntimePermissionRuleConfig;
 
 /// Permission level assigned to a tool invocation or runtime session.
@@ -95,14 +97,29 @@ pub enum PermissionOutcome {
 }
 
 /// Evaluates permission mode requirements plus allow/deny/ask rules.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone)]
 pub struct PermissionPolicy {
     active_mode: PermissionMode,
     tool_requirements: BTreeMap<String, PermissionMode>,
     allow_rules: Vec<PermissionRule>,
     deny_rules: Vec<PermissionRule>,
     ask_rules: Vec<PermissionRule>,
+    /// When set, approved tool calls are cached here so the user isn't
+    /// prompted again for the same operation.
+    approval_cache: Option<Arc<Mutex<ApprovalCache>>>,
 }
+
+impl PartialEq for PermissionPolicy {
+    fn eq(&self, other: &Self) -> bool {
+        self.active_mode == other.active_mode
+            && self.tool_requirements == other.tool_requirements
+            && self.allow_rules == other.allow_rules
+            && self.deny_rules == other.deny_rules
+            && self.ask_rules == other.ask_rules
+    }
+}
+
+impl Eq for PermissionPolicy {}
 
 impl PermissionPolicy {
     #[must_use]
@@ -113,7 +130,17 @@ impl PermissionPolicy {
             allow_rules: Vec::new(),
             deny_rules: Vec::new(),
             ask_rules: Vec::new(),
+            approval_cache: None,
         }
+    }
+
+    /// Attach an approval cache for smart approvals. When the user approves a
+    /// tool call, the pattern is cached so subsequent identical calls skip the
+    /// prompt.
+    #[must_use]
+    pub fn with_approval_cache(mut self, cache: Arc<Mutex<ApprovalCache>>) -> Self {
+        self.approval_cache = Some(cache);
+        self
     }
 
     #[must_use]
@@ -267,12 +294,23 @@ impl PermissionPolicy {
             || (current_mode == PermissionMode::WorkspaceWrite
                 && required_mode == PermissionMode::DangerFullAccess)
         {
+            // Check the approval cache before prompting the user.
+            if let Some(ref cache) = self.approval_cache {
+                if cache
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner)
+                    .is_approved(tool_name, input)
+                {
+                    return PermissionOutcome::Allow;
+                }
+            }
+
             let reason = Some(format!(
                 "tool '{tool_name}' requires approval to escalate from {} to {}",
                 current_mode.as_str(),
                 required_mode.as_str()
             ));
-            return Self::prompt_or_deny(
+            let outcome = Self::prompt_or_deny(
                 tool_name,
                 input,
                 current_mode,
@@ -280,6 +318,19 @@ impl PermissionPolicy {
                 reason,
                 prompter,
             );
+
+            // If the user approved, record it in the cache.
+            if matches!(outcome, PermissionOutcome::Allow) {
+                if let Some(ref cache) = self.approval_cache {
+                    use crate::approval_cache::ApprovalScope;
+                    cache
+                        .lock()
+                        .unwrap_or_else(std::sync::PoisonError::into_inner)
+                        .approve(tool_name, ApprovalScope::ToolOnly);
+                }
+            }
+
+            return outcome;
         }
 
         PermissionOutcome::Deny {
