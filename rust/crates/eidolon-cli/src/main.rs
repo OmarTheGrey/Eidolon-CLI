@@ -1,7 +1,9 @@
+// Narrowed from the original blanket allow — these cover scaffolding for
+// planned features (dead_code, unnecessary_wraps), trait conformance stubs
+// (unused_self), and generated pattern matching (unneeded_struct_pattern).
 #![allow(
     dead_code,
     unused_imports,
-    unused_variables,
     clippy::unneeded_struct_pattern,
     clippy::unnecessary_wraps,
     clippy::unused_self
