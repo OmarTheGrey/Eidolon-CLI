@@ -171,6 +171,27 @@ impl ApiError {
             | Self::BackoffOverflow { .. } => false,
         }
     }
+
+    /// Returns `true` if this error is eligible for provider fallback — i.e.
+    /// a different provider or credential might succeed where this one failed.
+    /// Covers: overloaded (529), rate limited (429), auth failures (401/403),
+    /// retries exhausted, and transient HTTP errors.
+    #[must_use]
+    pub fn is_fallback_eligible(&self) -> bool {
+        match self {
+            Self::Api { status, .. } => matches!(status.as_u16(), 401 | 403 | 429 | 529),
+            Self::RetriesExhausted { last_error, .. } => last_error.is_fallback_eligible(),
+            Self::Http(error) => error.is_connect() || error.is_timeout(),
+            Self::ExpiredOAuthToken | Self::Auth(_) => true,
+            Self::MissingCredentials { .. }
+            | Self::ContextWindowExceeded { .. }
+            | Self::InvalidApiKeyEnv(_)
+            | Self::Io(_)
+            | Self::Json(_)
+            | Self::InvalidSseFrame(_)
+            | Self::BackoffOverflow { .. } => false,
+        }
+    }
 }
 
 impl Display for ApiError {

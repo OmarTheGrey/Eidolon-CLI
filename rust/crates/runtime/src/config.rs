@@ -475,12 +475,11 @@ impl RuntimePluginConfig {
 }
 
 #[must_use]
-/// Returns the default per-user config directory used by the runtime.
+/// Returns the per-user config directory used by the runtime.
+/// When `EIDOLON_PROFILE` is set, returns the profile-specific directory.
+/// Otherwise falls back to `EIDOLON_CONFIG_HOME` or `~/.eidolon`.
 pub fn default_config_home() -> PathBuf {
-    std::env::var_os("EIDOLON_CONFIG_HOME")
-        .map(PathBuf::from)
-        .or_else(|| std::env::var_os("HOME").map(|home| PathBuf::from(home).join(".eidolon")))
-        .unwrap_or_else(|| PathBuf::from(".eidolon"))
+    crate::profile::resolve_profile_home()
 }
 
 impl RuntimeHookConfig {
