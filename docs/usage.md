@@ -391,6 +391,46 @@ curl http://localhost:8080/v1/chat/completions \
 
 Optionally protect the server with a bearer token configured at startup. Requests must include `Authorization: Bearer <token>`.
 
+## Themes
+
+Eidolon supports data-driven visual theming via YAML skin definitions. Themes control spinner characters, tool result colors, diff coloring, box-drawing characters, and prompt symbols.
+
+### Built-in Themes
+
+| Theme | Description |
+|-------|-------------|
+| `default` | Standard blue/green/cyan palette |
+| `mono` | Grayscale for minimal terminals or screen recordings |
+| `slate` | Cool blue-grey palette |
+| `ember` | Warm amber and crimson |
+
+### Switching Themes
+
+```
+/theme            # show current theme and available options
+/theme mono       # switch to monochrome
+/theme ember      # switch to warm amber
+```
+
+### Custom Themes
+
+Drop YAML files in `~/.eidolon/skins/` and they'll appear in `/theme`. A skin file looks like:
+
+```yaml
+name: my-theme
+description: "My custom theme"
+success: 70        # ANSI 256-color code
+error: 203
+muted: 245
+diff_add: 70
+diff_remove: 203
+diff_hunk: "cyan"  # or a named color
+spinner_frames: ["◐", "◓", "◑", "◒"]
+prompt_symbol: "» "
+```
+
+Any missing fields inherit from the default theme.
+
 ## Inline Diff Previews
 
 When the agent edits or overwrites a file, the terminal shows a proper unified diff preview with `@@ hunk headers`, colored additions/removals, and dimmed context lines. This gives immediate visibility into what changed without needing to inspect the file manually.

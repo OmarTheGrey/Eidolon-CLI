@@ -11,6 +11,7 @@
 mod init;
 mod input;
 mod render;
+pub mod skin;
 
 use std::collections::BTreeSet;
 use std::env;
@@ -60,6 +61,17 @@ use serde_json::{json, Map, Value};
 use tools::{GlobalToolRegistry, RuntimeToolDefinition, ToolSearchOutput};
 
 const DEFAULT_MODEL: &str = "claude-opus-4-6";
+
+/// Global skin manager for runtime theme switching.
+fn global_skin_manager() -> &'static skin::SkinManager {
+    static MANAGER: OnceLock<skin::SkinManager> = OnceLock::new();
+    MANAGER.get_or_init(skin::SkinManager::new)
+}
+
+/// Get the active skin snapshot for formatting.
+fn active_skin() -> skin::Skin {
+    global_skin_manager().current()
+}
 fn max_tokens_for_model(model: &str) -> u32 {
     if model.contains("opus") {
         32_000
@@ -3364,8 +3376,28 @@ impl LiveCli {
             | SlashCommand::Brief
             | SlashCommand::Advisor
             | SlashCommand::Stickers
-            | SlashCommand::Insights
-            | SlashCommand::Thinkback
+            | SlashCommand::Insights => {
+                eprintln!("Command registered but not yet implemented.");
+                false
+            }
+            SlashCommand::Theme { name } => {
+                if let Some(name) = name {
+                    match global_skin_manager().set_active(&name) {
+                        Ok(()) => println!("Switched to theme: {name}"),
+                        Err(e) => eprintln!("{e}"),
+                    }
+                } else {
+                    let current = active_skin().name;
+                    let available = global_skin_manager().available_names();
+                    println!("Current theme: {current}");
+                    println!("Available: {}", available.join(", "));
+                    println!("\nSwitch with /theme <name>");
+                    println!("Custom themes: drop YAML files in ~/.eidolon/skins/");
+                }
+                false
+            }
+            #[allow(clippy::match_same_arms)] // distinct feature group
+            SlashCommand::Thinkback
             | SlashCommand::ReleaseNotes
             | SlashCommand::SecurityReview
             | SlashCommand::Keybindings
@@ -3373,7 +3405,6 @@ impl LiveCli {
             | SlashCommand::Plan { .. }
             | SlashCommand::Review { .. }
             | SlashCommand::Tasks { .. }
-            | SlashCommand::Theme { .. }
             | SlashCommand::Voice { .. }
             | SlashCommand::Usage { .. }
             | SlashCommand::Rename { .. }
@@ -6354,6 +6385,11 @@ fn slash_command_completion_candidates_with_sessions(
         "/agents help",
         "/mcp help",
         "/skills help",
+        "/theme ",
+        "/theme default",
+        "/theme mono",
+        "/theme slate",
+        "/theme ember",
     ] {
         completions.insert(candidate.to_string());
     }
@@ -6427,37 +6463,52 @@ fn format_tool_call_start(name: &str, input: &str) -> String {
         _ => summarize_tool_payload(input),
     };
 
-    let border = "─".repeat(name.len() + 8);
+    let s = active_skin();
+    let r = skin::RESET;
+    let bc = s.box_color.fg();
+    let tn = s.tool_name.fg();
+    let h = &s.box_horizontal;
+    let border = h.repeat(name.len() + 8);
     format!(
-        "\x1b[38;5;245m╭─ \x1b[1;36m{name}\x1b[0;38;5;245m ─╮\x1b[0m\n\x1b[38;5;245m│\x1b[0m {detail}\n\x1b[38;5;245m╰{border}╯\x1b[0m"
+        "{bc}{tl}{h} {b}{tn}{name}{r}{bc} {h}{tr}{r}\n{bc}{v}{r} {detail}\n{bc}{bl}{border}{br}{r}",
+        tl = s.box_top_left,
+        tr = s.box_top_right,
+        bl = s.box_bottom_left,
+        br = "╯",
+        v = s.box_vertical,
+        b = skin::BOLD,
     )
 }
 
 fn format_tool_result(name: &str, output: &str, is_error: bool) -> String {
+    let s = active_skin();
+    let r = skin::RESET;
     let icon = if is_error {
-        "\x1b[1;31m✗\x1b[0m"
+        format!("{b}{err}✗{r}", b = skin::BOLD, err = s.error.fg())
     } else {
-        "\x1b[1;32m✓\x1b[0m"
+        format!("{b}{ok}✓{r}", b = skin::BOLD, ok = s.success.fg())
     };
     if is_error {
+        let muted = s.muted.fg();
+        let err_fg = s.error.fg();
         let summary = truncate_for_summary(output.trim(), 160);
         return if summary.is_empty() {
-            format!("{icon} \x1b[38;5;245m{name}\x1b[0m")
+            format!("{icon} {muted}{name}{r}")
         } else {
-            format!("{icon} \x1b[38;5;245m{name}\x1b[0m\n\x1b[38;5;203m{summary}\x1b[0m")
+            format!("{icon} {muted}{name}{r}\n{err_fg}{summary}{r}")
         };
     }
 
     let parsed: serde_json::Value =
         serde_json::from_str(output).unwrap_or(serde_json::Value::String(output.to_string()));
     match name {
-        "bash" | "Bash" => format_bash_result(icon, &parsed),
-        "read_file" | "Read" => format_read_result(icon, &parsed),
-        "write_file" | "Write" => format_write_result(icon, &parsed),
-        "edit_file" | "Edit" => format_edit_result(icon, &parsed),
-        "glob_search" | "Glob" => format_glob_result(icon, &parsed),
-        "grep_search" | "Grep" => format_grep_result(icon, &parsed),
-        _ => format_generic_tool_result(icon, name, &parsed),
+        "bash" | "Bash" => format_bash_result(&icon, &parsed),
+        "read_file" | "Read" => format_read_result(&icon, &parsed),
+        "write_file" | "Write" => format_write_result(&icon, &parsed),
+        "edit_file" | "Edit" => format_edit_result(&icon, &parsed),
+        "glob_search" | "Glob" => format_glob_result(&icon, &parsed),
+        "grep_search" | "Grep" => format_grep_result(&icon, &parsed),
+        _ => format_generic_tool_result(&icon, name, &parsed),
     }
 }
 
@@ -6595,6 +6646,8 @@ fn format_read_result(icon: &str, parsed: &serde_json::Value) -> String {
 }
 
 fn format_write_result(icon: &str, parsed: &serde_json::Value) -> String {
+    let s = active_skin();
+    let r = skin::RESET;
     let path = extract_tool_path(parsed);
     let kind = parsed
         .get("type")
@@ -6604,9 +6657,12 @@ fn format_write_result(icon: &str, parsed: &serde_json::Value) -> String {
         .get("content")
         .and_then(|value| value.as_str())
         .map_or(0, |content| content.lines().count());
+    let fw = s.file_write.fg();
+    let dim = skin::DIM;
     let header = format!(
-        "{icon} \x1b[1;32m✏️ {} {path}\x1b[0m \x1b[2m({line_count} lines)\x1b[0m",
+        "{icon} {b}{fw}✏️ {} {path}{r} {dim}({line_count} lines){r}",
         if kind == "create" { "Wrote" } else { "Updated" },
+        b = skin::BOLD,
     );
     if kind == "update" {
         if let Some(preview) = format_structured_patch_preview(parsed) {
@@ -6617,6 +6673,13 @@ fn format_write_result(icon: &str, parsed: &serde_json::Value) -> String {
 }
 
 fn format_structured_patch_preview(parsed: &serde_json::Value) -> Option<String> {
+    let s = active_skin();
+    let r = skin::RESET;
+    let dim = skin::DIM;
+    let add = s.diff_add.fg();
+    let rem = s.diff_remove.fg();
+    let hunk_color = s.diff_hunk.fg();
+
     let hunks = parsed.get("structuredPatch")?.as_array()?;
     let mut preview = Vec::new();
     for hunk in hunks.iter().take(4) {
@@ -6640,28 +6703,28 @@ fn format_structured_patch_preview(parsed: &serde_json::Value) -> Option<String>
             preview.push(String::new());
         }
         preview.push(format!(
-            "\x1b[36m@@ -{old_start},{old_lines} +{new_start},{new_lines} @@\x1b[0m"
+            "{hunk_color}@@ -{old_start},{old_lines} +{new_start},{new_lines} @@{r}"
         ));
         let Some(lines) = hunk.get("lines").and_then(serde_json::Value::as_array) else {
             continue;
         };
         for line in lines.iter().filter_map(|value| value.as_str()).take(12) {
             match line.chars().next() {
-                Some('+') => preview.push(format!("\x1b[38;5;70m{line}\x1b[0m")),
-                Some('-') => preview.push(format!("\x1b[38;5;203m{line}\x1b[0m")),
-                _ => preview.push(format!("\x1b[2m{line}\x1b[0m")),
+                Some('+') => preview.push(format!("{add}{line}{r}")),
+                Some('-') => preview.push(format!("{rem}{line}{r}")),
+                _ => preview.push(format!("{dim}{line}{r}")),
             }
         }
         if lines.len() > 12 {
             preview.push(format!(
-                "\x1b[2m  … {} more lines in this hunk\x1b[0m",
+                "{dim}  … {} more lines in this hunk{r}",
                 lines.len() - 12
             ));
         }
     }
     let remaining = hunks.len().saturating_sub(4);
     if remaining > 0 {
-        preview.push(format!("\x1b[2m  … {remaining} more hunks\x1b[0m"));
+        preview.push(format!("{dim}  … {remaining} more hunks{r}"));
     }
     if preview.is_empty() {
         None
@@ -6693,9 +6756,13 @@ fn format_edit_result(icon: &str, parsed: &serde_json::Value) -> String {
         format_patch_preview(old_value, new_value)
     });
 
+    let s = active_skin();
+    let fe = s.file_edit.fg();
+    let r = skin::RESET;
+    let b = skin::BOLD;
     match preview {
-        Some(preview) => format!("{icon} \x1b[1;33m📝 Edited {path}{suffix}\x1b[0m\n{preview}"),
-        None => format!("{icon} \x1b[1;33m📝 Edited {path}{suffix}\x1b[0m"),
+        Some(preview) => format!("{icon} {b}{fe}📝 Edited {path}{suffix}{r}\n{preview}"),
+        None => format!("{icon} {b}{fe}📝 Edited {path}{suffix}{r}"),
     }
 }
 
