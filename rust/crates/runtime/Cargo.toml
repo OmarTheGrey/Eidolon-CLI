@@ -9,6 +9,7 @@ publish.workspace = true
 test-support = []
 
 [dependencies]
+rusqlite = { version = "0.31", features = ["bundled"] }
 similar = "2"
 sha2 = "0.10"
 glob = "0.3"
