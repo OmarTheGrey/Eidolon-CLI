@@ -653,6 +653,7 @@ name = "eidolon-cli"
 version = "0.1.0"
 dependencies = [
  "api",
+ "api-server",
  "commands",
  "crossterm",
  "mock-anthropic-service",

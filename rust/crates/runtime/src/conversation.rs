@@ -1800,7 +1800,7 @@ mod tests {
 
     #[cfg(windows)]
     fn shell_snippet(script: &str) -> String {
-        script.replace('\'', "\"")
+        script.to_string()
     }
 
     #[cfg(not(windows))]

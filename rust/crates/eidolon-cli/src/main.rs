@@ -1,7 +1,9 @@
+// Narrowed from the original blanket allow — these cover scaffolding for
+// planned features (dead_code, unnecessary_wraps), trait conformance stubs
+// (unused_self), and generated pattern matching (unneeded_struct_pattern).
 #![allow(
     dead_code,
     unused_imports,
-    unused_variables,
     clippy::unneeded_struct_pattern,
     clippy::unnecessary_wraps,
     clippy::unused_self
@@ -177,6 +179,9 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
             model,
             output_format,
         } => run_syndicate(collection, task, list, &model, output_format)?,
+        CliAction::Serve { bind, model } => run_serve(&bind, &model)?,
+        CliAction::Profile { action, name } => run_profile(&action, name.as_deref())?,
+        CliAction::McpServe => run_mcp_serve()?,
     }
     Ok(())
 }
@@ -260,6 +265,15 @@ enum CliAction {
         model: String,
         output_format: CliOutputFormat,
     },
+    Serve {
+        bind: String,
+        model: String,
+    },
+    Profile {
+        action: String,
+        name: Option<String>,
+    },
+    McpServe,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -510,6 +524,25 @@ fn parse_args(args: &[String]) -> Result<CliAction, String> {
                 permission_mode,
             })
         }
+        "serve" => {
+            let bind = rest
+                .get(1)
+                .and_then(|a| {
+                    if a == "--bind" {
+                        rest.get(2).cloned()
+                    } else {
+                        Some(a.clone())
+                    }
+                })
+                .unwrap_or_else(|| "127.0.0.1:8080".to_string());
+            Ok(CliAction::Serve { bind, model })
+        }
+        "profile" => {
+            let action = rest.get(1).cloned().unwrap_or_else(|| "list".to_string());
+            let name = rest.get(2).cloned();
+            Ok(CliAction::Profile { action, name })
+        }
+        "mcp-serve" => Ok(CliAction::McpServe),
         other if other.starts_with('/') => parse_direct_slash_cli_action(
             &rest,
             model,
@@ -4851,6 +4884,68 @@ fn run_syndicate(
         }
     }
 
+    Ok(())
+}
+
+fn run_serve(bind: &str, model: &str) -> Result<(), Box<dyn std::error::Error>> {
+    let auth = resolve_cli_auth_source()?;
+    let state = api_server::AppState::new(auth, model.to_string());
+
+    println!("Eidolon API server starting on {bind}");
+    println!("  POST /v1/chat/completions");
+    println!("  GET  /v1/models");
+    println!("  GET  /health");
+    println!("\nPress Ctrl+C to stop.\n");
+
+    let rt = tokio::runtime::Runtime::new()?;
+    rt.block_on(api_server::serve(state, bind))?;
+    Ok(())
+}
+
+fn run_profile(action: &str, name: Option<&str>) -> Result<(), Box<dyn std::error::Error>> {
+    match action {
+        "list" => {
+            let profiles = runtime::profile::list_profiles();
+            let active = runtime::profile::active_profile_name();
+            if profiles.is_empty() {
+                println!("No profiles. Create one with: eidolon-cli profile create <name>");
+            } else {
+                println!("Profiles:");
+                for p in &profiles {
+                    let marker = if active.as_deref() == Some(p.as_str()) {
+                        " (active)"
+                    } else {
+                        ""
+                    };
+                    println!("  {p}{marker}");
+                }
+            }
+        }
+        "create" => {
+            let name = name.ok_or("usage: eidolon-cli profile create <name>")?;
+            let path = runtime::profile::create_profile(name)?;
+            println!("Created profile '{name}' at {}", path.display());
+            println!("Activate with: EIDOLON_PROFILE={name} eidolon-cli");
+        }
+        "delete" => {
+            let name = name.ok_or("usage: eidolon-cli profile delete <name>")?;
+            runtime::profile::delete_profile(name)?;
+            println!("Deleted profile '{name}'");
+        }
+        other => {
+            return Err(format!(
+                "unknown profile action: {other}. Use list, create, or delete."
+            )
+            .into());
+        }
+    }
+    Ok(())
+}
+
+fn run_mcp_serve() -> Result<(), Box<dyn std::error::Error>> {
+    let sessions_dir = env::current_dir()?.join(".eidolon").join("sessions");
+    eprintln!("Eidolon MCP server running on stdio (sessions: {})", sessions_dir.display());
+    runtime::mcp_server::run_mcp_server(&sessions_dir)?;
     Ok(())
 }
 

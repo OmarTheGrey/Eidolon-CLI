@@ -11,6 +11,7 @@ path = "src/main.rs"
 
 [dependencies]
 api = { path = "../api" }
+api-server = { path = "../api-server" }
 commands = { path = "../commands" }
 crossterm = "0.28"
 pulldown-cmark = "0.13"
