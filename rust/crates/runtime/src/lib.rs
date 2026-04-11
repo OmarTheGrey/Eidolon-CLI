@@ -30,6 +30,7 @@ pub mod permission_enforcer;
 mod permissions;
 pub mod plugin_lifecycle;
 mod policy_engine;
+pub mod process_registry;
 pub mod profile;
 mod prompt;
 pub mod recovery_recipes;
