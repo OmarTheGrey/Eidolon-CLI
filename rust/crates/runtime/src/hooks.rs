@@ -634,8 +634,16 @@ fn format_hook_failure(command: &str, code: i32, stdout: Option<&str>, stderr: &
 fn shell_command(command: &str) -> CommandWithStdin {
     #[cfg(windows)]
     let command_builder = {
-        let mut command_builder = Command::new("cmd");
-        command_builder.arg("/C").arg(command);
+        // Use bash (from Git for Windows) when available, fall back to cmd.
+        let (program, args): (&str, Vec<&str>) = if which_bash_exists() {
+            ("bash", vec!["-c", command])
+        } else {
+            ("cmd", vec!["/C", command])
+        };
+        let mut command_builder = Command::new(program);
+        for arg in args {
+            command_builder.arg(arg);
+        }
         CommandWithStdin::new(command_builder)
     };
 
@@ -647,6 +655,16 @@ fn shell_command(command: &str) -> CommandWithStdin {
     };
 
     command_builder
+}
+
+#[cfg(windows)]
+fn which_bash_exists() -> bool {
+    Command::new("bash")
+        .arg("--version")
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()
+        .is_ok_and(|s| s.success())
 }
 
 struct CommandWithStdin {
@@ -975,9 +993,11 @@ mod tests {
         )));
     }
 
+    /// On Windows, this is an identity function since `shell_command` now
+    /// uses bash (from Git for Windows), making Unix shell syntax work.
     #[cfg(windows)]
     fn shell_snippet(script: &str) -> String {
-        script.replace('\'', "\"")
+        script.to_string()
     }
 
     #[cfg(not(windows))]
