@@ -11,7 +11,7 @@ use api::{
 use plugins::PluginTool;
 use reqwest::blocking::Client;
 use runtime::{
-    check_freshness, dedupe_superseded_commit_events, edit_file, execute_bash, glob_search,
+    check_freshness, dedupe_superseded_commit_events, edit_file, glob_search,
     grep_search, load_system_prompt,
     lsp_client::LspRegistry,
     mcp_tool_bridge::McpToolRegistry,
@@ -93,6 +93,24 @@ pub fn init_index_handle(handle: runtime::IndexHandle) {
 
 fn global_index_handle() -> Option<&'static runtime::IndexHandle> {
     index_handle_global::HANDLE.get()
+}
+
+mod process_registry_global {
+    use std::sync::OnceLock;
+    pub(super) static REGISTRY: OnceLock<runtime::process_registry::ProcessRegistry> =
+        OnceLock::new();
+}
+
+/// Initialise the global process registry for background process tracking.
+/// Should be called once from CLI startup.
+pub fn init_process_registry(
+    registry: runtime::process_registry::ProcessRegistry,
+) {
+    let _ = process_registry_global::REGISTRY.set(registry);
+}
+
+fn global_process_registry() -> Option<&'static runtime::process_registry::ProcessRegistry> {
+    process_registry_global::REGISTRY.get()
 }
 
 /// Initialise the global syndicate memory with a file-backed instance.
@@ -679,6 +697,55 @@ pub fn mvp_tool_specs() -> Vec<ToolSpec> {
                 "additionalProperties": false
             }),
             required_permission: PermissionMode::ReadOnly,
+        },
+        ToolSpec {
+            name: "ProcessList",
+            description: "List all background processes (running and finished) with their status, command, and ID.",
+            input_schema: json!({
+                "type": "object",
+                "properties": {},
+                "additionalProperties": false
+            }),
+            required_permission: PermissionMode::ReadOnly,
+        },
+        ToolSpec {
+            name: "ProcessStatus",
+            description: "Get the current status of a specific background process by ID.",
+            input_schema: json!({
+                "type": "object",
+                "properties": {
+                    "id": { "type": "string", "description": "Process ID (e.g. bg-1)" }
+                },
+                "required": ["id"],
+                "additionalProperties": false
+            }),
+            required_permission: PermissionMode::ReadOnly,
+        },
+        ToolSpec {
+            name: "ProcessOutput",
+            description: "Read the stdout/stderr output of a background process.",
+            input_schema: json!({
+                "type": "object",
+                "properties": {
+                    "id": { "type": "string", "description": "Process ID (e.g. bg-1)" }
+                },
+                "required": ["id"],
+                "additionalProperties": false
+            }),
+            required_permission: PermissionMode::ReadOnly,
+        },
+        ToolSpec {
+            name: "ProcessKill",
+            description: "Terminate a running background process.",
+            input_schema: json!({
+                "type": "object",
+                "properties": {
+                    "id": { "type": "string", "description": "Process ID (e.g. bg-1)" }
+                },
+                "required": ["id"],
+                "additionalProperties": false
+            }),
+            required_permission: PermissionMode::DangerFullAccess,
         },
         ToolSpec {
             name: "SendUserMessage",
@@ -1308,6 +1375,13 @@ fn execute_tool_with_enforcer(
         "ToolSearch" => from_value::<ToolSearchInput>(input).and_then(run_tool_search),
         "NotebookEdit" => from_value::<NotebookEditInput>(input).and_then(run_notebook_edit),
         "Sleep" => from_value::<SleepInput>(input).and_then(run_sleep),
+        "ProcessList" => run_process_list(input.clone()),
+        "ProcessStatus" => from_value::<ProcessIdInput>(input).and_then(|v| run_process_status(&v)),
+        "ProcessOutput" => from_value::<ProcessIdInput>(input).and_then(|v| run_process_output(&v)),
+        "ProcessKill" => {
+            maybe_enforce_permission_check(enforcer, name, input)?;
+            from_value::<ProcessIdInput>(input).and_then(|v| run_process_kill(&v))
+        }
         "SendUserMessage" | "Brief" => from_value::<BriefInput>(input).and_then(run_brief),
         "Config" => from_value::<ConfigInput>(input).and_then(run_config),
         "EnterPlanMode" => from_value::<EnterPlanModeInput>(input).and_then(run_enter_plan_mode),
@@ -1967,8 +2041,9 @@ fn run_bash(input: BashCommandInput) -> Result<String, String> {
     if let Some(output) = workspace_test_branch_preflight(&input.command) {
         return serde_json::to_string_pretty(&output).map_err(|error| error.to_string());
     }
-    serde_json::to_string_pretty(&execute_bash(input).map_err(|error| error.to_string())?)
-        .map_err(|error| error.to_string())
+    let output = runtime::execute_bash_with_registry(input, global_process_registry())
+        .map_err(|error| error.to_string())?;
+    serde_json::to_string_pretty(&output).map_err(|error| error.to_string())
 }
 
 fn workspace_test_branch_preflight(command: &str) -> Option<BashCommandOutput> {
@@ -2232,6 +2307,44 @@ fn run_notebook_edit(input: NotebookEditInput) -> Result<String, String> {
 fn run_sleep(input: SleepInput) -> Result<String, String> {
     to_pretty_json(execute_sleep(input)?)
 }
+
+// ─── Process management tools ───────────────────────────────────────────────
+
+#[derive(Deserialize)]
+struct ProcessIdInput {
+    id: String,
+}
+
+fn run_process_list(_input: Value) -> Result<String, String> {
+    let registry =
+        global_process_registry().ok_or_else(|| "process registry not initialized".to_string())?;
+    let entries = registry.list();
+    serde_json::to_string_pretty(&entries).map_err(|e| e.to_string())
+}
+
+fn run_process_status(input: &ProcessIdInput) -> Result<String, String> {
+    let registry =
+        global_process_registry().ok_or_else(|| "process registry not initialized".to_string())?;
+    let entry = registry
+        .status(&input.id)
+        .ok_or_else(|| format!("unknown process: {}", input.id))?;
+    serde_json::to_string_pretty(&entry).map_err(|e| e.to_string())
+}
+
+fn run_process_output(input: &ProcessIdInput) -> Result<String, String> {
+    let registry =
+        global_process_registry().ok_or_else(|| "process registry not initialized".to_string())?;
+    registry.read_output(&input.id)
+}
+
+fn run_process_kill(input: &ProcessIdInput) -> Result<String, String> {
+    let registry =
+        global_process_registry().ok_or_else(|| "process registry not initialized".to_string())?;
+    registry.kill(&input.id)?;
+    Ok(format!("process {} killed", input.id))
+}
+
+// ─── End process management tools ───────────────────────────────────────────
 
 fn run_brief(input: BriefInput) -> Result<String, String> {
     to_pretty_json(execute_brief(input)?)

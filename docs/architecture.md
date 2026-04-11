@@ -292,7 +292,7 @@ Sessions persist the full conversation history for resumption:
 
 Tools are the model's interface to the environment. The global tool registry combines:
 
-1. **Built-in tools**: `bash`, `read_file`, `write_file`, `edit_file`, `glob_search`, `grep_search`, `semantic_search`, `Skill`, `Agent`, `SyndicateMemoryWrite`, `SyndicateMemoryRead`, `SyndicateMemoryLog`, `SyndicateMemorySearch`, `TodoRead`, `TodoWrite`
+1. **Built-in tools**: `bash`, `read_file`, `write_file`, `edit_file`, `glob_search`, `grep_search`, `semantic_search`, `Skill`, `Agent`, `SyndicateMemoryWrite`, `SyndicateMemoryRead`, `SyndicateMemoryLog`, `SyndicateMemorySearch`, `TodoRead`, `TodoWrite`, `ProcessList`, `ProcessStatus`, `ProcessOutput`, `ProcessKill`
 2. **MCP tools**: Dynamically registered from MCP server discovery
 3. **Conditional tools**: Enabled based on config or runtime state
 
