@@ -4,6 +4,7 @@
 //! MCP plumbing, tool-facing file operations, and the core conversation loop
 //! that drives interactive and one-shot turns.
 
+pub mod approval_cache;
 mod bash;
 pub mod bash_validation;
 mod bootstrap;
@@ -49,6 +50,7 @@ mod trust_resolver;
 mod usage;
 pub mod worker_boot;
 
+pub use approval_cache::{ApprovalCache, ApprovalEntry, ApprovalScope};
 pub use bash::{execute_bash, BashCommandInput, BashCommandOutput};
 pub use bootstrap::{BootstrapPhase, BootstrapPlan};
 pub use branch_lock::{detect_branch_lock_collisions, BranchLockCollision, BranchLockIntent};
