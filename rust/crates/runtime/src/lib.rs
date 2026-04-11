@@ -22,6 +22,7 @@ pub mod lsp_client;
 mod mcp;
 mod mcp_client;
 pub mod mcp_lifecycle_hardened;
+pub mod mcp_server;
 mod mcp_stdio;
 pub mod mcp_tool_bridge;
 mod oauth;
@@ -37,6 +38,7 @@ pub mod sandbox;
 mod session;
 #[cfg(test)]
 mod session_control;
+pub mod session_index;
 mod sse;
 pub mod stale_branch;
 pub mod summary_compression;
