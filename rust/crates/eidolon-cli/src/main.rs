@@ -6493,6 +6493,17 @@ fn slash_command_completion_candidates_with_sessions(
         "/model opus",
         "/model sonnet",
         "/model haiku",
+        "/model glm",
+        "/model glm-4.6",
+        "/model glm-5.1",
+        "/model kimi",
+        "/model qwen",
+        "/model minimax",
+        "/model z-ai/glm-4.6",
+        "/model z-ai/glm-5.1",
+        "/model moonshotai/kimi-k2.5",
+        "/model qwen/qwen3.6-plus",
+        "/model minimax/minimax-m2.7",
         "/permissions ",
         "/permissions read-only",
         "/permissions workspace-write",
@@ -7886,6 +7897,15 @@ mod tests {
         assert_eq!(resolve_model_alias("sonnet"), "claude-sonnet-4-6");
         assert_eq!(resolve_model_alias("haiku"), "claude-haiku-4-5-20251213");
         assert_eq!(resolve_model_alias("claude-opus"), "claude-opus");
+    }
+
+    #[test]
+    fn resolves_openrouter_short_aliases_via_local_helper() {
+        assert_eq!(resolve_model_alias("glm"), "z-ai/glm-4.6");
+        assert_eq!(resolve_model_alias("glm-5.1"), "z-ai/glm-5.1");
+        assert_eq!(resolve_model_alias("kimi"), "moonshotai/kimi-k2.5");
+        assert_eq!(resolve_model_alias("qwen"), "qwen/qwen3.6-plus");
+        assert_eq!(resolve_model_alias("minimax"), "minimax/minimax-m2.7");
     }
 
     #[test]
