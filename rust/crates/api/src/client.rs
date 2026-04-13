@@ -198,4 +198,39 @@ mod tests {
             "meta-llama/llama-3.3-70b-instruct"
         );
     }
+
+    #[test]
+    fn openrouter_short_aliases_expand_to_canonical_names() {
+        assert_eq!(resolve_model_alias("glm"), "z-ai/glm-4.6");
+        assert_eq!(resolve_model_alias("glm-4.6"), "z-ai/glm-4.6");
+        assert_eq!(resolve_model_alias("glm-5"), "z-ai/glm-5.1");
+        assert_eq!(resolve_model_alias("glm-5.1"), "z-ai/glm-5.1");
+        assert_eq!(resolve_model_alias("minimax"), "minimax/minimax-m2.7");
+        assert_eq!(resolve_model_alias("qwen"), "qwen/qwen3.6-plus");
+        assert_eq!(resolve_model_alias("kimi"), "moonshotai/kimi-k2.5");
+        assert_eq!(resolve_model_alias("kimi-k2"), "moonshotai/kimi-k2.5");
+    }
+
+    #[test]
+    fn curated_openrouter_list_contains_expected_models() {
+        let models: Vec<&str> = crate::providers::OPENROUTER_CURATED_MODELS
+            .iter()
+            .map(|(name, _)| *name)
+            .collect();
+        assert!(models.contains(&"z-ai/glm-4.6"));
+        assert!(models.contains(&"z-ai/glm-5.1"));
+        assert!(models.contains(&"minimax/minimax-m2.7"));
+        assert!(models.contains(&"qwen/qwen3.6-plus"));
+        assert!(models.contains(&"moonshotai/kimi-k2.5"));
+        assert_eq!(models.len(), 5);
+    }
+
+    #[test]
+    fn default_openrouter_model_is_curated() {
+        let default = crate::providers::DEFAULT_OPENROUTER_MODEL;
+        let in_list = crate::providers::OPENROUTER_CURATED_MODELS
+            .iter()
+            .any(|(name, _)| *name == default);
+        assert!(in_list, "default {default} must be in curated list");
+    }
 }
