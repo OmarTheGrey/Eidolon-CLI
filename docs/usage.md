@@ -72,9 +72,64 @@ All commands support `--output-format json` for machine-readable output — esse
 
 Grok models require the `XAI_API_KEY` environment variable. The API endpoint can be overridden with `XAI_BASE_URL`.
 
+### OpenRouter
+
+OpenRouter is supported natively and gives access to hundreds of models from every major provider through one API.
+
+#### Setup
+
+The easiest way is to just run the CLI — if you don't have `OPENROUTER_API_KEY` set in env, Eidolon will prompt you on first use:
+
+```bash
+eidolon-cli
+
+# Output:
+# OpenRouter setup
+# No OpenRouter API key found. Get one at https://openrouter.ai/keys
+# OpenRouter API key: _
+```
+
+The entered key is saved to `~/.eidolon/credentials.json` and reused on subsequent runs. Or set it explicitly via env var:
+
+```bash
+export OPENROUTER_API_KEY="sk-or-v1-..."
+```
+
+#### Curated Models
+
+Eidolon ships with a curated list of OpenRouter models exposed as short aliases:
+
+| Alias | Resolves To | Description |
+|---|---|---|
+| `glm` / `glm-4.6` | `z-ai/glm-4.6` | Zhipu GLM-4.6 — fast, cost-effective coding |
+| `glm-5` / `glm-5.1` | `z-ai/glm-5.1` | Zhipu GLM-5.1 — next-generation reasoning |
+| `kimi` / `kimi-k2` | `moonshotai/kimi-k2.5` | Moonshot Kimi K2.5 — 200K context reasoning |
+| `qwen` / `qwen3` | `qwen/qwen3.6-plus` | Alibaba Qwen 3.6 Plus — multilingual & coding |
+| `minimax` / `minimax-m2` | `minimax/minimax-m2.7` | MiniMax M2.7 — long-context generalist |
+
+```bash
+eidolon-cli --model glm           # default OpenRouter model
+eidolon-cli --model glm-5.1       # next-gen GLM
+eidolon-cli --model kimi          # 200K context Kimi K2.5
+eidolon-cli --model qwen          # Qwen 3.6 Plus
+eidolon-cli --model minimax       # MiniMax M2.7
+```
+
+When an OpenRouter key is configured, Eidolon defaults to `z-ai/glm-4.6` if you don't pass `--model`. Override the base URL with `OPENROUTER_BASE_URL` if you use a proxy.
+
+#### Other OpenRouter Models
+
+Any OpenRouter model name (in `owner/model` format) routes through OpenRouter automatically:
+
+```bash
+eidolon-cli --model "anthropic/claude-sonnet-4.5"
+eidolon-cli --model "meta-llama/llama-3.3-70b-instruct"
+eidolon-cli --model "openai/gpt-4o"
+```
+
 ### OpenAI-Compatible Providers
 
-Any model name not matching a built-in alias is routed through the OpenAI-compatible provider. Set `OPENAI_API_KEY` and optionally `OPENAI_BASE_URL` to use third-party OpenAI-compatible endpoints.
+Any model name not matching a built-in alias is routed through the OpenAI-compatible provider. Set `OPENAI_API_KEY` and optionally `OPENAI_BASE_URL` to use third-party OpenAI-compatible endpoints (Ollama, LM Studio, vLLM, llama.cpp, etc.).
 
 Pass `--model sonnet` or use the `/model` slash command in the REPL.
 

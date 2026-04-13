@@ -114,6 +114,12 @@ Control which tools are available to the agent. Use this to restrict the agent's
 | `ANTHROPIC_API_KEY` | API key for Anthropic |
 | `ANTHROPIC_AUTH_TOKEN` | Bearer token (alternative to API key) |
 | `ANTHROPIC_BASE_URL` | Override the Anthropic API endpoint |
+| `XAI_API_KEY` | API key for xAI (Grok) |
+| `XAI_BASE_URL` | Override the xAI API endpoint |
+| `OPENROUTER_API_KEY` | API key for OpenRouter (gives access to 100+ models) |
+| `OPENROUTER_BASE_URL` | Override the OpenRouter API endpoint |
+| `OPENAI_API_KEY` | API key for OpenAI or any OpenAI-compatible endpoint |
+| `OPENAI_BASE_URL` | Override the OpenAI endpoint (Ollama, LM Studio, vLLM, etc.) |
 | `EIDOLON_CONFIG_HOME` | Override the config/credentials directory (default: `~/.eidolon`) |
 | `EIDOLON_PROFILE` | Activate a named profile — resolves config home to `~/.eidolon/profiles/<name>/` |
 | `CLAUDE_CONFIG_DIR` | Claude-compatible config directory for skill/command discovery |

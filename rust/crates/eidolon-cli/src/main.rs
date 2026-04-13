@@ -62,6 +62,76 @@ use tools::{GlobalToolRegistry, RuntimeToolDefinition, ToolSearchOutput};
 
 const DEFAULT_MODEL: &str = "claude-opus-4-6";
 
+/// Resolve the default model when `--model` isn't passed. Prefers the
+/// `OpenRouter` default (`z-ai/glm-4.6`) when `OpenRouter` credentials are
+/// available (either via env var or a saved key in `credentials.json`).
+/// Falls back to the Anthropic default otherwise.
+fn resolve_default_model() -> String {
+    let env_key_set = std::env::var("OPENROUTER_API_KEY")
+        .map(|v| !v.is_empty())
+        .unwrap_or(false);
+    let saved_key_exists = runtime::load_openrouter_api_key()
+        .ok()
+        .flatten()
+        .is_some();
+    if env_key_set || saved_key_exists {
+        return api::DEFAULT_OPENROUTER_MODEL.to_string();
+    }
+    DEFAULT_MODEL.to_string()
+}
+
+/// Ensure the `OPENROUTER_API_KEY` env var is populated before creating an
+/// `OpenRouter` client. Order of resolution:
+///   1. Env var already set — nothing to do
+///   2. Saved key in `~/.eidolon/credentials.json` — set env var from it
+///   3. Prompt the user interactively, save the entered key, set env var
+///
+/// Only prompts in interactive terminals. In JSON/non-interactive mode,
+/// returns an error so the caller can produce a structured failure.
+fn ensure_openrouter_key_available(interactive: bool) -> Result<(), String> {
+    if std::env::var("OPENROUTER_API_KEY")
+        .map(|v| !v.is_empty())
+        .unwrap_or(false)
+    {
+        return Ok(());
+    }
+
+    if let Ok(Some(key)) = runtime::load_openrouter_api_key() {
+        std::env::set_var("OPENROUTER_API_KEY", &key);
+        return Ok(());
+    }
+
+    if !interactive {
+        return Err(
+            "OpenRouter API key not configured. Set OPENROUTER_API_KEY or run \
+             `eidolon-cli` interactively to enter one."
+                .to_string(),
+        );
+    }
+
+    // Interactive prompt.
+    println!("\n\x1b[1;36mOpenRouter setup\x1b[0m");
+    println!("No OpenRouter API key found. Get one at https://openrouter.ai/keys");
+    print!("OpenRouter API key: ");
+    io::stdout().flush().ok();
+
+    let mut line = String::new();
+    io::stdin()
+        .read_line(&mut line)
+        .map_err(|e| format!("failed to read API key: {e}"))?;
+    let key = line.trim().to_string();
+
+    if key.is_empty() {
+        return Err("OpenRouter API key is required".to_string());
+    }
+
+    runtime::save_openrouter_api_key(&key)
+        .map_err(|e| format!("failed to save API key: {e}"))?;
+    std::env::set_var("OPENROUTER_API_KEY", &key);
+    println!("\x1b[38;5;70m✓ Saved to ~/.eidolon/credentials.json\x1b[0m\n");
+    Ok(())
+}
+
 /// Global skin manager for runtime theme switching.
 fn global_skin_manager() -> &'static skin::SkinManager {
     static MANAGER: OnceLock<skin::SkinManager> = OnceLock::new();
@@ -129,7 +199,21 @@ Run `eidolon --help` for usage."
 
 fn run() -> Result<(), Box<dyn std::error::Error>> {
     let args: Vec<String> = env::args().skip(1).collect();
-    match parse_args(&args)? {
+    let action = parse_args(&args)?;
+
+    // If the action references a model that routes through OpenRouter,
+    // ensure the API key is configured before we proceed.
+    let is_json = matches!(
+        action_output_format(&action),
+        Some(CliOutputFormat::Json)
+    );
+    if let Some(model) = action_model(&action) {
+        if api::detect_provider_kind(model) == api::ProviderKind::OpenRouter {
+            ensure_openrouter_key_available(!is_json)?;
+        }
+    }
+
+    match action {
         CliAction::BootstrapPlan { output_format } => print_bootstrap_plan(output_format)?,
         CliAction::Agents {
             args,
@@ -288,6 +372,46 @@ enum CliAction {
     McpServe,
 }
 
+/// Extract the model name from a CLI action, if the action has one.
+fn action_model(action: &CliAction) -> Option<&str> {
+    match action {
+        CliAction::Prompt { model, .. }
+        | CliAction::Repl { model, .. }
+        | CliAction::Status { model, .. }
+        | CliAction::Syndicate { model, .. }
+        | CliAction::Serve { model, .. } => Some(model.as_str()),
+        _ => None,
+    }
+}
+
+/// Extract the output format from a CLI action, if applicable.
+fn action_output_format(action: &CliAction) -> Option<CliOutputFormat> {
+    match action {
+        CliAction::BootstrapPlan { output_format }
+        | CliAction::Agents { output_format, .. }
+        | CliAction::Mcp { output_format, .. }
+        | CliAction::Skills { output_format, .. }
+        | CliAction::Plugins { output_format, .. }
+        | CliAction::PrintSystemPrompt { output_format, .. }
+        | CliAction::Version { output_format }
+        | CliAction::ResumeSession { output_format, .. }
+        | CliAction::Status { output_format, .. }
+        | CliAction::Sandbox { output_format }
+        | CliAction::Prompt { output_format, .. }
+        | CliAction::Login { output_format }
+        | CliAction::Logout { output_format }
+        | CliAction::Doctor { output_format }
+        | CliAction::Init { output_format }
+        | CliAction::Help { output_format }
+        | CliAction::Syndicate { output_format, .. } => Some(*output_format),
+        CliAction::Repl { .. }
+        | CliAction::HelpTopic(_)
+        | CliAction::Serve { .. }
+        | CliAction::Profile { .. }
+        | CliAction::McpServe => None,
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum LocalHelpTopic {
     Status,
@@ -315,7 +439,10 @@ impl CliOutputFormat {
 
 #[allow(clippy::too_many_lines)]
 fn parse_args(args: &[String]) -> Result<CliAction, String> {
-    let mut model = DEFAULT_MODEL.to_string();
+    // When --model isn't passed, the default is resolved at the end of
+    // parse_args based on available credentials (OpenRouter vs Anthropic).
+    let mut model = String::new();
+    let mut explicit_model = false;
     let mut output_format = CliOutputFormat::Text;
     let mut permission_mode_override = None;
     let mut wants_help = false;
@@ -338,11 +465,13 @@ fn parse_args(args: &[String]) -> Result<CliAction, String> {
                 let value = args
                     .get(index + 1)
                     .ok_or_else(|| "missing value for --model".to_string())?;
-                model = resolve_model_alias(value).to_string();
+                model = resolve_model_alias(value);
+                explicit_model = true;
                 index += 2;
             }
             flag if flag.starts_with("--model=") => {
-                model = resolve_model_alias(&flag[8..]).to_string();
+                model = resolve_model_alias(&flag[8..]);
+                explicit_model = true;
                 index += 1;
             }
             "--output-format" => {
@@ -379,7 +508,7 @@ fn parse_args(args: &[String]) -> Result<CliAction, String> {
                 }
                 return Ok(CliAction::Prompt {
                     prompt,
-                    model: resolve_model_alias(&model).to_string(),
+                    model: resolve_model_alias(&model),
                     output_format,
                     allowed_tools: normalize_allowed_tools(&allowed_tool_values)?,
                     permission_mode: permission_mode_override
@@ -431,6 +560,10 @@ fn parse_args(args: &[String]) -> Result<CliAction, String> {
 
     if wants_version {
         return Ok(CliAction::Version { output_format });
+    }
+
+    if !explicit_model {
+        model = resolve_default_model();
     }
 
     let allowed_tools = normalize_allowed_tools(&allowed_tool_values)?;
@@ -827,13 +960,9 @@ fn levenshtein_distance(left: &str, right: &str) -> usize {
     previous[right_chars.len()]
 }
 
-fn resolve_model_alias(model: &str) -> &str {
-    match model {
-        "opus" => "claude-opus-4-6",
-        "sonnet" => "claude-sonnet-4-6",
-        "haiku" => "claude-haiku-4-5-20251213",
-        _ => model,
-    }
+// Re-export of api::resolve_model_alias so existing local call sites work.
+fn resolve_model_alias(model: &str) -> String {
+    api::resolve_model_alias(model)
 }
 
 fn normalize_allowed_tools(values: &[String]) -> Result<Option<AllowedToolSet>, String> {
@@ -3479,7 +3608,7 @@ impl LiveCli {
             return Ok(false);
         };
 
-        let model = resolve_model_alias(&model).to_string();
+        let model = resolve_model_alias(&model);
 
         if model == self.model {
             println!(
@@ -6364,6 +6493,17 @@ fn slash_command_completion_candidates_with_sessions(
         "/model opus",
         "/model sonnet",
         "/model haiku",
+        "/model glm",
+        "/model glm-4.6",
+        "/model glm-5.1",
+        "/model kimi",
+        "/model qwen",
+        "/model minimax",
+        "/model z-ai/glm-4.6",
+        "/model z-ai/glm-5.1",
+        "/model moonshotai/kimi-k2.5",
+        "/model qwen/qwen3.6-plus",
+        "/model minimax/minimax-m2.7",
         "/permissions ",
         "/permissions read-only",
         "/permissions workspace-write",
@@ -7757,6 +7897,15 @@ mod tests {
         assert_eq!(resolve_model_alias("sonnet"), "claude-sonnet-4-6");
         assert_eq!(resolve_model_alias("haiku"), "claude-haiku-4-5-20251213");
         assert_eq!(resolve_model_alias("claude-opus"), "claude-opus");
+    }
+
+    #[test]
+    fn resolves_openrouter_short_aliases_via_local_helper() {
+        assert_eq!(resolve_model_alias("glm"), "z-ai/glm-4.6");
+        assert_eq!(resolve_model_alias("glm-5.1"), "z-ai/glm-5.1");
+        assert_eq!(resolve_model_alias("kimi"), "moonshotai/kimi-k2.5");
+        assert_eq!(resolve_model_alias("qwen"), "qwen/qwen3.6-plus");
+        assert_eq!(resolve_model_alias("minimax"), "minimax/minimax-m2.7");
     }
 
     #[test]

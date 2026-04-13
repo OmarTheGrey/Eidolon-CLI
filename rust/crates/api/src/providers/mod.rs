@@ -33,6 +33,7 @@ pub enum ProviderKind {
     Anthropic,
     Xai,
     OpenAi,
+    OpenRouter,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -48,6 +49,45 @@ pub struct ModelTokenLimit {
     pub max_output_tokens: u32,
     pub context_window_tokens: u32,
 }
+
+/// Curated list of `OpenRouter` models that Eidolon exposes as first-class
+/// options. Each entry is `(alias_or_canonical_name, display_description)`.
+/// The canonical `OpenRouter` slug is used as the actual model when routing.
+pub const OPENROUTER_CURATED_MODELS: &[(&str, &str)] = &[
+    ("z-ai/glm-4.6", "Zhipu GLM-4.6 — fast, cost-effective coding"),
+    ("z-ai/glm-5.1", "Zhipu GLM-5.1 — next-generation reasoning"),
+    (
+        "minimax/minimax-m2.7",
+        "MiniMax M2.7 — long-context generalist",
+    ),
+    (
+        "qwen/qwen3.6-plus",
+        "Alibaba Qwen 3.6 Plus — strong multilingual and coding",
+    ),
+    (
+        "moonshotai/kimi-k2.5",
+        "Moonshot Kimi K2.5 — 200K context reasoning",
+    ),
+];
+
+/// Default `OpenRouter` model used when no `--model` flag is provided and
+/// `OpenRouter` is the active provider.
+pub const DEFAULT_OPENROUTER_MODEL: &str = "z-ai/glm-4.6";
+
+/// Short-form aliases that expand to canonical `OpenRouter` model names.
+const OPENROUTER_ALIASES: &[(&str, &str)] = &[
+    ("glm", "z-ai/glm-4.6"),
+    ("glm-4", "z-ai/glm-4.6"),
+    ("glm-4.6", "z-ai/glm-4.6"),
+    ("glm-5", "z-ai/glm-5.1"),
+    ("glm-5.1", "z-ai/glm-5.1"),
+    ("minimax", "minimax/minimax-m2.7"),
+    ("minimax-m2", "minimax/minimax-m2.7"),
+    ("qwen", "qwen/qwen3.6-plus"),
+    ("qwen3", "qwen/qwen3.6-plus"),
+    ("kimi", "moonshotai/kimi-k2.5"),
+    ("kimi-k2", "moonshotai/kimi-k2.5"),
+];
 
 const MODEL_REGISTRY: &[(&str, ProviderMetadata)] = &[
     (
@@ -128,6 +168,13 @@ const MODEL_REGISTRY: &[(&str, ProviderMetadata)] = &[
 pub fn resolve_model_alias(model: &str) -> String {
     let trimmed = model.trim();
     let lower = trimmed.to_ascii_lowercase();
+    // Check OpenRouter short aliases first (glm, kimi, qwen, minimax).
+    if let Some((_, canonical)) = OPENROUTER_ALIASES
+        .iter()
+        .find(|(alias, _)| *alias == lower)
+    {
+        return (*canonical).to_string();
+    }
     MODEL_REGISTRY
         .iter()
         .find_map(|(alias, metadata)| {
@@ -144,7 +191,7 @@ pub fn resolve_model_alias(model: &str) -> String {
                     "grok-2" => "grok-2",
                     _ => trimmed,
                 },
-                ProviderKind::OpenAi => trimmed,
+                ProviderKind::OpenAi | ProviderKind::OpenRouter => trimmed,
             })
         })
         .map_or_else(|| trimmed.to_string(), ToOwned::to_owned)
@@ -169,6 +216,16 @@ pub fn metadata_for_model(model: &str) -> Option<ProviderMetadata> {
             default_base_url: openai_compat::DEFAULT_XAI_BASE_URL,
         });
     }
+    // Namespaced models like `anthropic/claude-sonnet-4.5` or
+    // `meta-llama/llama-3.3-70b-instruct` are OpenRouter-style.
+    if canonical.contains('/') {
+        return Some(ProviderMetadata {
+            provider: ProviderKind::OpenRouter,
+            auth_env: "OPENROUTER_API_KEY",
+            base_url_env: "OPENROUTER_BASE_URL",
+            default_base_url: openai_compat::DEFAULT_OPENROUTER_BASE_URL,
+        });
+    }
     None
 }
 
@@ -176,6 +233,11 @@ pub fn metadata_for_model(model: &str) -> Option<ProviderMetadata> {
 pub fn detect_provider_kind(model: &str) -> ProviderKind {
     if let Some(metadata) = metadata_for_model(model) {
         return metadata.provider;
+    }
+    // For unknown models, prefer OpenRouter if its key is set — it has the
+    // broadest model coverage and is the most likely generic fallback.
+    if openai_compat::has_api_key("OPENROUTER_API_KEY") {
+        return ProviderKind::OpenRouter;
     }
     if anthropic::has_auth_from_env_or_saved().unwrap_or(false) {
         return ProviderKind::Anthropic;

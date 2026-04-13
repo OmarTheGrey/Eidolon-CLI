@@ -11,6 +11,7 @@ pub enum ProviderClient {
     Anthropic(AnthropicClient),
     Xai(OpenAiCompatClient),
     OpenAi(OpenAiCompatClient),
+    OpenRouter(OpenAiCompatClient),
 }
 
 impl ProviderClient {
@@ -34,6 +35,9 @@ impl ProviderClient {
             ProviderKind::OpenAi => Ok(Self::OpenAi(OpenAiCompatClient::from_env(
                 OpenAiCompatConfig::openai(),
             )?)),
+            ProviderKind::OpenRouter => Ok(Self::OpenRouter(OpenAiCompatClient::from_env(
+                OpenAiCompatConfig::openrouter(),
+            )?)),
         }
     }
 
@@ -43,6 +47,7 @@ impl ProviderClient {
             Self::Anthropic(_) => ProviderKind::Anthropic,
             Self::Xai(_) => ProviderKind::Xai,
             Self::OpenAi(_) => ProviderKind::OpenAi,
+            Self::OpenRouter(_) => ProviderKind::OpenRouter,
         }
     }
 
@@ -58,7 +63,7 @@ impl ProviderClient {
     pub fn prompt_cache_stats(&self) -> Option<PromptCacheStats> {
         match self {
             Self::Anthropic(client) => client.prompt_cache_stats(),
-            Self::Xai(_) | Self::OpenAi(_) => None,
+            Self::Xai(_) | Self::OpenAi(_) | Self::OpenRouter(_) => None,
         }
     }
 
@@ -66,7 +71,7 @@ impl ProviderClient {
     pub fn take_last_prompt_cache_record(&self) -> Option<PromptCacheRecord> {
         match self {
             Self::Anthropic(client) => client.take_last_prompt_cache_record(),
-            Self::Xai(_) | Self::OpenAi(_) => None,
+            Self::Xai(_) | Self::OpenAi(_) | Self::OpenRouter(_) => None,
         }
     }
 
@@ -76,7 +81,9 @@ impl ProviderClient {
     ) -> Result<MessageResponse, ApiError> {
         match self {
             Self::Anthropic(client) => client.send_message(request).await,
-            Self::Xai(client) | Self::OpenAi(client) => client.send_message(request).await,
+            Self::Xai(client) | Self::OpenAi(client) | Self::OpenRouter(client) => {
+                client.send_message(request).await
+            }
         }
     }
 
@@ -89,7 +96,7 @@ impl ProviderClient {
                 .stream_message(request)
                 .await
                 .map(MessageStream::Anthropic),
-            Self::Xai(client) | Self::OpenAi(client) => client
+            Self::Xai(client) | Self::OpenAi(client) | Self::OpenRouter(client) => client
                 .stream_message(request)
                 .await
                 .map(MessageStream::OpenAiCompat),
@@ -151,5 +158,79 @@ mod tests {
             detect_provider_kind("claude-sonnet-4-6"),
             ProviderKind::Anthropic
         );
+    }
+
+    #[test]
+    fn namespaced_models_route_to_openrouter() {
+        assert_eq!(
+            detect_provider_kind("anthropic/claude-sonnet-4.5"),
+            ProviderKind::OpenRouter
+        );
+        assert_eq!(
+            detect_provider_kind("meta-llama/llama-3.3-70b-instruct"),
+            ProviderKind::OpenRouter
+        );
+        assert_eq!(
+            detect_provider_kind("openai/gpt-4o"),
+            ProviderKind::OpenRouter
+        );
+    }
+
+    #[test]
+    fn openrouter_metadata_includes_correct_env_vars() {
+        let meta = crate::providers::metadata_for_model("google/gemini-2.5-pro");
+        assert!(meta.is_some());
+        let meta = meta.unwrap();
+        assert_eq!(meta.provider, ProviderKind::OpenRouter);
+        assert_eq!(meta.auth_env, "OPENROUTER_API_KEY");
+        assert_eq!(meta.base_url_env, "OPENROUTER_BASE_URL");
+        assert_eq!(meta.default_base_url, "https://openrouter.ai/api/v1");
+    }
+
+    #[test]
+    fn resolve_alias_passes_through_namespaced_models() {
+        assert_eq!(
+            resolve_model_alias("anthropic/claude-sonnet-4.5"),
+            "anthropic/claude-sonnet-4.5"
+        );
+        assert_eq!(
+            resolve_model_alias("meta-llama/llama-3.3-70b-instruct"),
+            "meta-llama/llama-3.3-70b-instruct"
+        );
+    }
+
+    #[test]
+    fn openrouter_short_aliases_expand_to_canonical_names() {
+        assert_eq!(resolve_model_alias("glm"), "z-ai/glm-4.6");
+        assert_eq!(resolve_model_alias("glm-4.6"), "z-ai/glm-4.6");
+        assert_eq!(resolve_model_alias("glm-5"), "z-ai/glm-5.1");
+        assert_eq!(resolve_model_alias("glm-5.1"), "z-ai/glm-5.1");
+        assert_eq!(resolve_model_alias("minimax"), "minimax/minimax-m2.7");
+        assert_eq!(resolve_model_alias("qwen"), "qwen/qwen3.6-plus");
+        assert_eq!(resolve_model_alias("kimi"), "moonshotai/kimi-k2.5");
+        assert_eq!(resolve_model_alias("kimi-k2"), "moonshotai/kimi-k2.5");
+    }
+
+    #[test]
+    fn curated_openrouter_list_contains_expected_models() {
+        let models: Vec<&str> = crate::providers::OPENROUTER_CURATED_MODELS
+            .iter()
+            .map(|(name, _)| *name)
+            .collect();
+        assert!(models.contains(&"z-ai/glm-4.6"));
+        assert!(models.contains(&"z-ai/glm-5.1"));
+        assert!(models.contains(&"minimax/minimax-m2.7"));
+        assert!(models.contains(&"qwen/qwen3.6-plus"));
+        assert!(models.contains(&"moonshotai/kimi-k2.5"));
+        assert_eq!(models.len(), 5);
+    }
+
+    #[test]
+    fn default_openrouter_model_is_curated() {
+        let default = crate::providers::DEFAULT_OPENROUTER_MODEL;
+        let in_list = crate::providers::OPENROUTER_CURATED_MODELS
+            .iter()
+            .any(|(name, _)| *name == default);
+        assert!(in_list, "default {default} must be in curated list");
     }
 }
