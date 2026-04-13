@@ -72,9 +72,22 @@ All commands support `--output-format json` for machine-readable output — esse
 
 Grok models require the `XAI_API_KEY` environment variable. The API endpoint can be overridden with `XAI_BASE_URL`.
 
+### OpenRouter
+
+OpenRouter is supported natively and gives access to hundreds of models from every major provider through one API.
+
+```bash
+export OPENROUTER_API_KEY="sk-or-v1-..."
+eidolon-cli --model "anthropic/claude-sonnet-4.5"
+eidolon-cli --model "meta-llama/llama-3.3-70b-instruct"
+eidolon-cli --model "openai/gpt-4o"
+```
+
+Eidolon auto-detects OpenRouter from namespaced model names (the `owner/model` format). When `OPENROUTER_API_KEY` is set, any unknown model also routes through OpenRouter. Override the base URL with `OPENROUTER_BASE_URL` if you use a proxy.
+
 ### OpenAI-Compatible Providers
 
-Any model name not matching a built-in alias is routed through the OpenAI-compatible provider. Set `OPENAI_API_KEY` and optionally `OPENAI_BASE_URL` to use third-party OpenAI-compatible endpoints.
+Any model name not matching a built-in alias is routed through the OpenAI-compatible provider. Set `OPENAI_API_KEY` and optionally `OPENAI_BASE_URL` to use third-party OpenAI-compatible endpoints (Ollama, LM Studio, vLLM, llama.cpp, etc.).
 
 Pass `--model sonnet` or use the `/model` slash command in the REPL.
 

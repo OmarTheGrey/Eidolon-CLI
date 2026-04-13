@@ -33,7 +33,7 @@ Built following the **Regula Framework** — a set of agentic design patterns fo
 - **Inline diff previews** — file edits and writes show proper unified diffs in the terminal with hunk headers and colored context
 - **Session persistence** — JSONL-based conversation history with token-aware automatic compaction
 - **Cross-session search** — SQLite FTS5 index enables keyword search across all past conversations
-- **Multi-provider support** — Anthropic Claude, OpenAI, and xAI Grok via a unified provider abstraction
+- **Multi-provider support** — Anthropic Claude, OpenAI, xAI Grok, and OpenRouter (100+ models) via a unified provider abstraction with automatic model routing
 - **Provider fallback chains** — ordered failover across multiple providers or API keys on overload (529), rate limit (429), or auth errors
 - **Smart approvals** — permission decisions are cached so the same tool pattern doesn't re-prompt within a session
 - **Profile isolation** — run multiple Eidolon instances with separate config, sessions, skills, and credentials via `EIDOLON_PROFILE`
