@@ -298,6 +298,37 @@ pub fn clear_oauth_credentials() -> io::Result<()> {
     write_credentials_root(&path, &root)
 }
 
+/// Load the saved `OpenRouter` API key, if any.
+/// Looks up the `openrouter_api_key` field in `credentials.json`.
+pub fn load_openrouter_api_key() -> io::Result<Option<String>> {
+    let path = credentials_path()?;
+    let root = read_credentials_root(&path)?;
+    Ok(root
+        .get("openrouter_api_key")
+        .and_then(|v| v.as_str())
+        .filter(|s| !s.is_empty())
+        .map(ToString::to_string))
+}
+
+/// Save an `OpenRouter` API key to `credentials.json`.
+pub fn save_openrouter_api_key(key: &str) -> io::Result<()> {
+    let path = credentials_path()?;
+    let mut root = read_credentials_root(&path)?;
+    root.insert(
+        "openrouter_api_key".to_string(),
+        Value::String(key.to_string()),
+    );
+    write_credentials_root(&path, &root)
+}
+
+/// Remove the saved `OpenRouter` API key from `credentials.json`.
+pub fn clear_openrouter_api_key() -> io::Result<()> {
+    let path = credentials_path()?;
+    let mut root = read_credentials_root(&path)?;
+    root.remove("openrouter_api_key");
+    write_credentials_root(&path, &root)
+}
+
 pub fn parse_oauth_callback_request_target(target: &str) -> Result<OAuthCallbackParams, String> {
     let (path, query) = target
         .split_once('?')
@@ -459,10 +490,11 @@ mod tests {
     use std::time::{SystemTime, UNIX_EPOCH};
 
     use super::{
-        clear_oauth_credentials, code_challenge_s256, credentials_path, generate_pkce_pair,
-        generate_state, load_oauth_credentials, loopback_redirect_uri, parse_oauth_callback_query,
-        parse_oauth_callback_request_target, save_oauth_credentials, OAuthAuthorizationRequest,
-        OAuthConfig, OAuthRefreshRequest, OAuthTokenExchangeRequest, OAuthTokenSet,
+        clear_oauth_credentials, clear_openrouter_api_key, code_challenge_s256, credentials_path,
+        generate_pkce_pair, generate_state, load_oauth_credentials, load_openrouter_api_key,
+        loopback_redirect_uri, parse_oauth_callback_query, parse_oauth_callback_request_target,
+        save_oauth_credentials, save_openrouter_api_key, OAuthAuthorizationRequest, OAuthConfig,
+        OAuthRefreshRequest, OAuthTokenExchangeRequest, OAuthTokenSet,
     };
 
     fn sample_config() -> OAuthConfig {
@@ -574,6 +606,41 @@ mod tests {
         let cleared = std::fs::read_to_string(&path).expect("read cleared file");
         assert!(cleared.contains("\"other\": \"value\""));
         assert!(!cleared.contains("\"oauth\""));
+
+        std::env::remove_var("EIDOLON_CONFIG_HOME");
+        std::fs::remove_dir_all(config_home).expect("cleanup temp dir");
+    }
+
+    #[test]
+    fn openrouter_api_key_round_trip_preserves_other_credential_fields() {
+        let _guard = env_lock();
+        let config_home = temp_config_home();
+        std::env::set_var("EIDOLON_CONFIG_HOME", &config_home);
+        let path = credentials_path().expect("credentials path");
+        std::fs::create_dir_all(path.parent().expect("parent")).expect("create parent");
+        std::fs::write(&path, "{\"other\":\"value\"}\n").expect("seed credentials");
+
+        // Initially no key.
+        assert_eq!(load_openrouter_api_key().expect("load empty"), None);
+
+        // Save.
+        save_openrouter_api_key("sk-or-v1-test-key").expect("save key");
+        assert_eq!(
+            load_openrouter_api_key().expect("load saved"),
+            Some("sk-or-v1-test-key".to_string())
+        );
+
+        // Other fields preserved.
+        let saved = std::fs::read_to_string(&path).expect("read saved file");
+        assert!(saved.contains("\"other\": \"value\""));
+        assert!(saved.contains("\"openrouter_api_key\""));
+
+        // Clear.
+        clear_openrouter_api_key().expect("clear key");
+        assert_eq!(load_openrouter_api_key().expect("load cleared"), None);
+        let cleared = std::fs::read_to_string(&path).expect("read cleared file");
+        assert!(cleared.contains("\"other\": \"value\""));
+        assert!(!cleared.contains("openrouter_api_key"));
 
         std::env::remove_var("EIDOLON_CONFIG_HOME");
         std::fs::remove_dir_all(config_home).expect("cleanup temp dir");
